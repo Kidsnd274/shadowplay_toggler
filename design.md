@@ -66,7 +66,7 @@ So your scan logic can be:
 4. Enumerate all associated applications.
 5. Query 0x809D5F60.
 6. Record:
-    - profile name
+  - profile name
     - app name / friendly name
     - value
     - isPredefined
@@ -104,13 +104,13 @@ For each managed rule, store:
 - created/updated timestamps
 - driver version at write time
 
-### **2) Dedicated profile naming for app-created profiles**
+### **2) Transparent profile naming for app-created profiles**
 
-If an exe is not already attached to a driver profile, create a new user profile with a recognizable prefix, for example:
+If an exe is not already attached to a driver profile, create a new user profile named after the executable itself, for example:
 
-Capture Exclusion | obs64.exe
+obs64.exe
 
-That way, if your local DB is lost, you can rediscover most app-created rules just by scanning profile names.
+No hidden prefix or marker — the profile is visible and understandable in NVIDIA Profile Inspector or any other tool. The local SQLite database remains the authoritative record of which rules the app manages.
 
 ### **3) Reconciliation scan on startup**
 
@@ -118,8 +118,10 @@ On launch:
 
 - scan the driver DB
 - rebuild a detected-state snapshot
-- auto-recover prefixed profiles into **Managed**
-- place everything else into **Detected Existing Rules**
+- cross-reference each managed rule in the local DB against the driver to detect drift / orphans
+- place any 0x809D5F60 override that is **not** in the local DB into **Detected Existing Rules**
+
+If the local DB is lost, there is no automatic recovery; the user sees their previous rules in **Detected** and can re-adopt them one-by-one (or with a bulk action). DB loss is rare because the SQLite file lives in the app data directory and survives uninstalls and driver updates.
 
 ### **4) “Adopt existing rule” feature**
 
@@ -131,10 +133,12 @@ Before first write, offer a full driver-profile backup using NvAPI_DRS_SaveSetti
 
 ### **6) Disable rules by restoring defaults, not by forcing zero**
 
-Because the alternative values for 0x809D5F60 are not officially documented, the safest “off” action is:
+Because the alternative values for 0x809D5F60 are not officially documented, the safest “off” action is to **remove the setting override** and leave everything else alone:
 
-- if you created the profile: remove the app / delete the profile if empty
-- if you modified an existing profile: restore the setting to default
+- if the profile is user-created (no predefined value for this setting): call `NvAPI_DRS_DeleteSetting` to delete the setting key entirely.
+- if the profile is predefined by NVIDIA: call `NvAPI_DRS_RestoreProfileDefaultSetting` to restore NVIDIA's factory value.
+
+The app never deletes profiles or removes application attachments. An "empty" profile (one with no active settings) is functionally equivalent to no profile at all because of NVIDIA's hierarchy (Application Profile > Current Global Profile > Base Profile), and leaving it in place means the next re-exclusion is just a single `SetSetting` call. This also removes any need to make destructive decisions based on our own authorship tracking.
 
 That is much safer than assuming 0x00000000 means “off.”
 
@@ -156,7 +160,7 @@ That is concrete and maps directly to the profile rule you manage.
 │ [Scan NVIDIA Profiles] [Add Program] [Backup] [Settings]         │
 ├──────────────────────────────┬───────────────────────────────────┤
 │ Managed                      │ App: obs64.exe                    │
-│ Detected Existing Rules      │ Profile: Capture Exclusion | OBS  │
+│ Detected Existing Rules      │ Profile: obs64.exe                │
 │ NVIDIA Defaults              │ Status: Excluded                  │
 │                              │                                   │
 │ Search                       │ [ Exclude from Overlay ]          │
@@ -175,12 +179,12 @@ That is concrete and maps directly to the profile rule you manage.
 - **Detected Existing Rules** appears after first scan.
 - **NVIDIA Defaults** is collapsed or secondary so it does not clutter the main workflow.
 - Right pane shows:
-    - app name
-    - profile name
-    - status badge
-    - source badge: Managed / External / NVIDIA Default / Inherited
-    - current hex value
-    - advanced editor
+  - app name
+  - profile name
+  - status badge
+  - source badge: Managed / External / NVIDIA Default / Inherited
+  - current hex value
+  - advanced editor
 - After save, show a notice: **“Restart the target app for changes to fully apply.”** NVIDIA’s guide says driver settings are applied when the process initializes the NVIDIA DLL, so changing them mid-run may not affect an already-running target app.
 
 ### **Add-program flow**
@@ -189,10 +193,10 @@ That is concrete and maps directly to the profile rule you manage.
 2. File picker chooses an .exe
 3. App resolves full path and calls FindApplicationByName
 4. If it already belongs to a profile:
-    - show “This executable already belongs to profile X”
+  - show “This executable already belongs to profile X”
     - let user apply exclusion to that existing profile
 5. If not found:
-    - create a dedicated user profile
+  - create a dedicated user profile
     - add executable
     - apply setting
 6. Add rule to Managed list
@@ -359,15 +363,15 @@ The app stores only managed metadata:
 
 On startup, the app scans the driver DB and reconciles:
 
-- prefixed user profiles created by the app are auto-recovered
+- each rule in the local DB is cross-referenced against the driver to classify it as in-sync, drifted, or orphaned
 - existing overrides outside the DB are shown as unmanaged detected rules
-- users can adopt unmanaged rules into app management
+- users can adopt unmanaged rules into app management, which doubles as the recovery path if the local DB was lost
 
-This design is necessary because the published DRS structures expose predefined/user flags and current/predefined values, but do not expose a safe arbitrary metadata field for tagging existing profiles as “owned” by this app.
+This design is necessary because the published DRS structures expose predefined/user flags and current/predefined values, but do not expose a safe arbitrary metadata field for tagging existing profiles as “owned” by this app. Rather than embedding our ownership claim in a profile-name prefix, we rely on the local SQLite database as the source of truth for managed rules and on manual adoption as the recovery path.
 
 ## **Safety and Rollback**
 
-Before making the first driver modification, the app should offer a backup of current DRS settings using the NVAPI save-to-file API. When disabling or removing a managed rule, the app should restore defaults or delete the managed profile instead of assuming that zero is the correct “off” value. NVAPI exposes save/load, delete-setting, restore-profile-default, and restore-profile-default-setting operations for this purpose.
+Before making the first driver modification, the app should offer a backup of current DRS settings using the NVAPI save-to-file API. When disabling or removing a managed rule, the app should delete the setting key (for user-created profiles) or restore it to its predefined default (for NVIDIA predefined profiles), rather than forcing a zero value. The app does not delete profiles or remove application attachments when disabling a rule — an empty profile is functionally a no-op under NVIDIA's hierarchy, and keeping it in place makes re-exclusion cheap. NVAPI exposes save/load, delete-setting, restore-profile-default, and restore-profile-default-setting operations for this purpose.
 
 ## **Advanced Mode**
 

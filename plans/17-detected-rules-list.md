@@ -11,7 +11,7 @@ Populate the "Detected" tab with rules found by scanning the NVIDIA DRS database
 
 ## Background
 
-"Detected Existing Rules" are driver profile entries where setting `0x809D5F60` has a user override, but the profile was NOT created by this app (no managed prefix, not in the local DB). These could have been set by NVIDIA Profile Inspector, other tools, or manual editing.
+"Detected Existing Rules" are driver profile entries where setting `0x809D5F60` has a user override, but the `(exePath, profileName)` pair is not in the app's local SQLite database. These could have been set by NVIDIA Profile Inspector, other tools, manual editing, or by this app itself before a local-DB loss (in which case the user can re-adopt them).
 
 ## Tasks
 

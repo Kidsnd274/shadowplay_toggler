@@ -81,7 +81,7 @@ Settings have a type (DWORD, string, binary, etc.). Our target is a DWORD settin
      ```json
      {
        "success": true,
-       "profileName": "Capture Exclusion | obs64.exe",
+       "profileName": "obs64.exe",
        "created": true,
        "settingApplied": true
      }

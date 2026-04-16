@@ -61,14 +61,4 @@ class ManagedRulesRepository {
       whereArgs: [exePath],
     );
   }
-
-  Future<List<ManagedRule>> getRulesMatchingPrefix(String prefix) async {
-    final maps = await _dbService.db.query(
-      'managed_rules',
-      where: 'profile_name LIKE ?',
-      whereArgs: ['$prefix%'],
-      orderBy: 'updated_at DESC',
-    );
-    return maps.map(ManagedRule.fromMap).toList();
-  }
 }

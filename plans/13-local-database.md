@@ -77,7 +77,6 @@ The design calls for a hybrid model: NVIDIA's DRS database is the source of trut
      Future<void> updateRule(ManagedRule rule);
      Future<void> deleteRule(int id);
      Future<void> deleteRuleByExePath(String exePath);
-     Future<List<ManagedRule>> getRulesMatchingPrefix(String prefix);
      ```
 
 5. **Create `lib/models/managed_rule.dart`**

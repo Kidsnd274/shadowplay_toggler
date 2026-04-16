@@ -41,7 +41,10 @@ From `design.md`, the Add Program flow is:
         - Return result indicating the exe belongs to profile X.
         - Include whether the exclusion setting is already applied.
      5. If not found:
-        - Create a new profile named `"Capture Exclusion | {exeName}"`.
+        - Create a new profile named after the executable itself (e.g. `obs64.exe`).
+          Before creating, call `NvAPI_DRS_FindProfileByName` — if a profile with
+          that name already exists (e.g. another exe with the same filename or an
+          NVPI-created profile), reuse it and set `profile_was_created = false`.
         - Add the application to the profile.
         - Apply exclusion setting `0x809D5F60 = 0x10000000`.
         - Save settings.
@@ -73,7 +76,7 @@ From `design.md`, the Add Program flow is:
      - [Apply Exclusion] [Cancel]
    - Step 3b: If the exe is new, show a confirmation:
      - "Create a new exclusion rule for {exeName}?"
-     - "A new profile 'Capture Exclusion | {exeName}' will be created."
+     - "A new profile named '{exeName}' will be created."
      - [Create Rule] [Cancel]
    - Step 4: Show success or error result.
 
@@ -95,7 +98,7 @@ From `design.md`, the Add Program flow is:
 
 - Clicking "Add Program" opens a Windows file picker filtered to .exe files.
 - Selecting an exe correctly checks whether it already has an NVIDIA profile.
-- New profiles are created with the correct prefix naming convention.
+- New profiles are created using the executable's filename as the profile name.
 - The exclusion setting is applied to the profile.
 - The rule is saved to the local database.
 - The managed list refreshes and shows the new rule.

@@ -27,7 +27,7 @@ lib/
 ├── widgets/
 │   └── .gitkeep
 └── constants/
-    └── app_constants.dart     (setting IDs, profile prefix, etc.)
+    └── app_constants.dart     (setting IDs, magic values, etc.)
 ```
 
 1. **Extract `MaterialApp` into `app.dart`**

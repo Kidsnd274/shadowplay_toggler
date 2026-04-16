@@ -1,3 +1,5 @@
+import 'managed_rule.dart';
+
 class ExclusionRule {
   final String exePath;
   final String exeName;
@@ -22,6 +24,21 @@ class ExclusionRule {
     this.createdAt,
     this.updatedAt,
   });
+
+  factory ExclusionRule.fromManagedRule(ManagedRule rule) {
+    return ExclusionRule(
+      exePath: rule.exePath,
+      exeName: rule.exeName,
+      profileName: rule.profileName,
+      isManaged: true,
+      isPredefined: rule.profileWasPredefined,
+      currentValue: rule.intendedValue,
+      previousValue: rule.previousValue,
+      sourceType: 'managed',
+      createdAt: rule.createdAt,
+      updatedAt: rule.updatedAt,
+    );
+  }
 
   ExclusionRule copyWith({
     String? exePath,
@@ -49,14 +66,20 @@ class ExclusionRule {
     );
   }
 
+  /// Two rules are considered equal when their `(exePath, profileName,
+  /// sourceType)` triple matches. `sourceType` is part of identity because the
+  /// same exe+profile pair can appear in multiple tabs (Managed / Detected /
+  /// NVIDIA Default) and clicking the "same-looking" row in a different tab
+  /// must reselect, not be swallowed as a no-op by [StateController.state=].
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ExclusionRule &&
           runtimeType == other.runtimeType &&
           exePath == other.exePath &&
-          profileName == other.profileName;
+          profileName == other.profileName &&
+          sourceType == other.sourceType;
 
   @override
-  int get hashCode => exePath.hashCode ^ profileName.hashCode;
+  int get hashCode => Object.hash(exePath, profileName, sourceType);
 }

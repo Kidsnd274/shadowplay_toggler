@@ -31,6 +31,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  void _onScanProfiles() => _showNotImplemented('Scan Profiles');
+
   @override
   Widget build(BuildContext context) {
     final nvapiState = ref.watch(nvapiProvider);
@@ -39,7 +41,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       body: Column(
         children: [
           AppToolbar(
-            onScanProfiles: () => _showNotImplemented('Scan Profiles'),
+            onScanProfiles: _onScanProfiles,
             onAddProgram: () => _showNotImplemented('Add Program'),
             onBackup: () => _showNotImplemented('Backup'),
             onSettings: () => _showNotImplemented('Settings'),
@@ -48,9 +50,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             _NvapiBanner(message: nvapiState.message),
           Expanded(
             child: Row(
-              children: const [
-                Flexible(flex: 1, child: LeftPane()),
-                Flexible(flex: 2, child: RightPane()),
+              children: [
+                Flexible(
+                  flex: 1,
+                  child: LeftPane(onScanProfiles: _onScanProfiles),
+                ),
+                const Flexible(flex: 2, child: RightPane()),
               ],
             ),
           ),

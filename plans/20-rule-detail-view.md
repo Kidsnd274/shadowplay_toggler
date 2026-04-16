@@ -14,7 +14,7 @@ Build the right pane detail view that shows comprehensive information about the 
 ```
 +-----------------------------------+
 | App: obs64.exe                    |
-| Profile: Capture Exclusion | OBS  |
+| Profile: obs64.exe                |
 | Status: Excluded                  |
 |                                   |
 | [ Exclude from Overlay ]          |

@@ -15,10 +15,10 @@ Implement the reconciliation scan that runs on app startup to synchronize the lo
 From `design.md`, on launch the app should:
 - Scan the driver DB.
 - Rebuild a detected-state snapshot.
-- Auto-recover prefixed profiles into Managed.
-- Place everything else into Detected Existing Rules.
+- Cross-reference every row in the local managed-rules DB against the driver to detect in-sync / drifted / orphaned rules.
+- Place any `0x809D5F60` override that is **not** in the local DB into Detected Existing Rules.
 
-This handles the case where the local DB is lost (app reinstall, data reset) or where driver changes were made outside the app (driver update, manual editing, NPI).
+This handles the case where driver changes were made outside the app (driver update, manual editing, NVPI) and, after a local-DB loss, lets the user re-adopt their previous rules from the Detected tab. The app does not try to infer ownership from profile naming — the local SQLite database is the sole source of truth for managed rules.
 
 > **Driver-install resilience (important):** The local SQLite database survives driver
 > reinstalls, but the NVIDIA DRS database resets to factory defaults on every driver
@@ -58,15 +58,14 @@ This handles the case where the local DB is lost (app reinstall, data reset) or 
         `drsResetDetected: true` and the list of rules needing re-apply.
      4. For each managed rule in the local DB:
         a. Check if the profile still exists in the driver.
-        b. Check if the setting still has the expected value.
-        c. Classify:
-           - **In sync**: profile exists, setting matches intended value. No action.
-           - **Drifted**: profile exists, but setting value changed. Mark as warning.
-           - **Missing**: profile does not exist or app is not attached. Mark as orphaned.
-     5. Scan for orphaned app-created profiles (prefix match but not in DB):
-        - Auto-recover into the managed rules database.
-     6. Update `last_driver_version` and `drs_profile_hash` in app_state.
-     7. Return results.
+        b. Check if the application is still attached.
+        c. Check if the setting still has the expected value.
+        d. Classify:
+           - **In sync**: profile exists, app attached, setting matches intended value. No action.
+           - **Drifted**: profile exists and app attached, but setting value changed. Mark as warning.
+           - **Orphaned**: profile missing or app not attached. Mark as orphaned.
+     5. Update `last_driver_version` and `drs_profile_hash` in app_state.
+     6. Return results. (Any `0x809D5F60` overrides found during the driver scan that are not in the local DB are surfaced through plan 23's scan pipeline into the Detected tab — the reconciliation pass itself does not auto-recover anything.)
 
 2. **Create `lib/models/reconciliation_result.dart`**
    ```dart
@@ -77,7 +76,6 @@ This handles the case where the local DB is lost (app reinstall, data reset) or 
      final int rulesInSync;
      final int rulesDrifted;
      final int rulesOrphaned;
-     final int rulesRecovered;
      final int rulesNeedingReapply;
      final List<String> warnings;
      final Duration duration;
@@ -95,11 +93,11 @@ This handles the case where the local DB is lost (app reinstall, data reset) or 
    - If rules drifted: show a notification banner at the top of the home screen:
      "X managed rules have changed in the driver since last session."
      [Review] [Dismiss]
-   - If rules were recovered: show a snackbar:
-     "Recovered X previously managed rules."
    - If rules are orphaned: show a warning:
      "X managed rules could not be found in the driver."
      [Remove from list] [Keep]
+   - If the first-run scan finds external rules in the Detected tab (common after a local-DB loss): show a snackbar:
+     "X existing exclusion rules found outside the app — open the Detected tab to review or adopt them."
 
 5. **Update rule status in the managed list**
    - After reconciliation, each managed rule should have a `syncStatus` field:
@@ -122,7 +120,7 @@ This handles the case where the local DB is lost (app reinstall, data reset) or 
 - In-sync rules show green status.
 - Drifted rules are detected and flagged with amber status.
 - Orphaned rules are detected and flagged with red status.
-- Auto-recovery of prefixed profiles works.
+- No profile-name prefix inference or auto-recovery is performed; recovery of pre-existing rules happens through manual adoption in the Detected tab (plan 27).
 - `last_driver_version` and `drs_profile_hash` are updated after every successful reconciliation.
 - NVAPI failure is handled gracefully with a clear error message.
 - `flutter analyze` reports no errors.

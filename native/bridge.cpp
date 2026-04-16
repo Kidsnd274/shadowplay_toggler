@@ -492,12 +492,13 @@ const char* bridge_apply_exclusion(const char* appName) {
     if (!g_session || !appName)
         return alloc_json("{\"success\":false,\"error\":\"invalid args\"}");
 
+    // The *intended* profile name when we have to create a fresh profile.
+    // If the exe is already attached to something else, we use that something
+    // else's real name instead (see below).
     std::string exeName(appName);
     size_t lastSlash = exeName.find_last_of("\\/");
     std::string exeOnly = (lastSlash != std::string::npos)
         ? exeName.substr(lastSlash + 1) : exeName;
-
-    std::string profileNameStr = "Capture Exclusion | " + exeOnly;
 
     NvAPI_UnicodeString wideAppName = {};
     utf8_to_nvu16(appName, wideAppName, NVAPI_UNICODE_STRING_MAX);
@@ -510,11 +511,15 @@ const char* bridge_apply_exclusion(const char* appName) {
         g_session, wideAppName, &hProfile, &existingApp);
     bridge_log("  FindApplicationByName -> %d", static_cast<int>(status));
 
+    // `created` tracks only whether *we* created the profile in this call.
+    // `attached` tracks whether the exe was already attached to some profile
+    // before we touched it (FindApplicationByName succeeded).
     bool created = false;
+    bool alreadyAttached = (status == NVAPI_OK);
 
-    if (status != NVAPI_OK) {
+    if (!alreadyAttached) {
         NvAPI_UnicodeString wideProfileName = {};
-        utf8_to_nvu16(profileNameStr.c_str(), wideProfileName, NVAPI_UNICODE_STRING_MAX);
+        utf8_to_nvu16(exeOnly.c_str(), wideProfileName, NVAPI_UNICODE_STRING_MAX);
 
         status = NvAPI_DRS_FindProfileByName(g_session, wideProfileName, &hProfile);
         bridge_log("  FindProfileByName -> %d", static_cast<int>(status));
@@ -522,7 +527,7 @@ const char* bridge_apply_exclusion(const char* appName) {
         if (status == NVAPI_PROFILE_NOT_FOUND) {
             NVDRS_PROFILE profile = {};
             profile.version = NVDRS_PROFILE_VER;
-            utf8_to_nvu16(profileNameStr.c_str(), profile.profileName, NVAPI_UNICODE_STRING_MAX);
+            utf8_to_nvu16(exeOnly.c_str(), profile.profileName, NVAPI_UNICODE_STRING_MAX);
 
             status = NvAPI_DRS_CreateProfile(g_session, &profile, &hProfile);
             bridge_log("  CreateProfile -> %d", static_cast<int>(status));
@@ -543,6 +548,34 @@ const char* bridge_apply_exclusion(const char* appName) {
             return alloc_json("{\"success\":false,\"error\":\"failed to add application\"}");
     }
 
+    // Look up the *real* profile name and predefined flag so the Dart side
+    // persists accurate metadata. The exe may have been attached to a profile
+    // with a completely different name (e.g. NVIDIA's shipped "Steam Games")
+    // or we may have reused an existing user profile in FindProfileByName.
+    NVDRS_PROFILE profileInfo = {};
+    profileInfo.version = NVDRS_PROFILE_VER;
+    NvAPI_Status infoStatus =
+        NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+    bridge_log("  GetProfileInfo -> %d", static_cast<int>(infoStatus));
+
+    std::string realProfileName = exeOnly;
+    bool profileWasPredefined = false;
+    if (infoStatus == NVAPI_OK) {
+        realProfileName = nvu16_to_utf8(profileInfo.profileName);
+        profileWasPredefined = profileInfo.isPredefined != 0;
+    }
+
+    // Capture the setting's previous value (if any) *before* we overwrite it,
+    // so the caller can persist it for restore-default semantics.
+    NVDRS_SETTING previous = {};
+    previous.version = NVDRS_SETTING_VER;
+    bool hadPreviousValue = false;
+    NvAPI_Status prevStatus = NvAPI_DRS_GetSetting(
+        g_session, hProfile, SETTING_CAPTURE_EXCLUSION, &previous);
+    if (prevStatus == NVAPI_OK) {
+        hadPreviousValue = true;
+    }
+
     NVDRS_SETTING setting = {};
     setting.version = NVDRS_SETTING_VER;
     setting.settingId = SETTING_CAPTURE_EXCLUSION;
@@ -559,12 +592,26 @@ const char* bridge_apply_exclusion(const char* appName) {
     if (status != NVAPI_OK)
         return alloc_json("{\"success\":false,\"error\":\"failed to save settings\"}");
 
-    std::string safeName = escape_json_string(profileNameStr);
+    std::string safeName = escape_json_string(realProfileName);
     std::string json =
         "{\"success\":true"
         ",\"profileName\":\"" + safeName + "\""
-        ",\"created\":" + (created ? "true" : "false") +
-        ",\"settingApplied\":true}";
+        ",\"profileWasCreated\":" + (created ? "true" : "false") +
+        ",\"profileWasPredefined\":" + (profileWasPredefined ? "true" : "false") +
+        ",\"alreadyAttached\":" + (alreadyAttached ? "true" : "false") +
+        ",\"settingApplied\":true";
+
+    if (hadPreviousValue) {
+        char prevHex[32];
+        _snprintf_s(prevHex, sizeof(prevHex), _TRUNCATE,
+                    "0x%08X", previous.u32CurrentValue);
+        json += ",\"previousValue\":\"";
+        json += prevHex;
+        json += "\"";
+    } else {
+        json += ",\"previousValue\":null";
+    }
+    json += "}";
     return alloc_json(json);
 }
 
