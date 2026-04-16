@@ -2,7 +2,7 @@
 
 ## Goal
 
-Fix the broken default Flutter counter template and prepare a clean slate for the NVIDIA Capture Exclusion Manager app.
+Fix the broken default Flutter counter template and prepare a clean slate for the ShadowPlay Toggler app.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ Fix the broken default Flutter counter template and prepare a clean slate for th
 
 1. **Fix `lib/main.dart`**
   - Replace the counter demo with a minimal placeholder app.
-  - The app should show a centered `Text` widget saying "NVIDIA Capture Exclusion Manager" on a dark background.
+  - The app should show a centered `Text` widget saying "ShadowPlay Toggler" on a dark background.
   - Use `MaterialApp` with a basic dark theme (will be fully themed later in plan 03).
   - Remove all counter-related code (`_incrementCounter`, `_counter`, `FloatingActionButton`, etc.).
 2. **Fix `test/widget_test.dart`**
@@ -29,12 +29,12 @@ Fix the broken default Flutter counter template and prepare a clean slate for th
   - Test should pump `MyApp` (or whatever the root widget is named) and verify it finds the title text.
 3. **Update `pubspec.yaml`**
   - Verify `name: shadowplay_toggler` is correct.
-  - Update `description` to: "NVIDIA Capture Exclusion Manager - manage per-app ShadowPlay/Overlay exclusions."
+  - Update `description` to: "ShadowPlay Toggler - manage per-app ShadowPlay/Overlay exclusions."
   - Keep `version: 1.0.0+1`.
   - Remove `cupertino_icons` from dependencies (not needed for a Windows-only app).
 4. **Update `README.md`**
   - Replace the generic Flutter readme with a brief project description:
-    - Project name: NVIDIA Capture Exclusion Manager
+    - Project name: ShadowPlay Toggler
     - Purpose: Manage per-application NVIDIA capture/overlay exclusions via DRS profiles
     - Platform: Windows only
     - Tech: Flutter desktop + native C/C++ NVAPI bridge

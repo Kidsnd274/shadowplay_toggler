@@ -31,8 +31,8 @@ lib/
 ```
 
 1. **Extract `MaterialApp` into `app.dart`**
-  - Create `lib/app.dart` containing a `CaptureExclusionApp` widget (or `ShadowPlayTogglerApp`) that returns the `MaterialApp`.
-  - `main.dart` should only contain `void main() => runApp(CaptureExclusionApp());`
+  - Create `lib/app.dart` containing a `ShadowPlayTogglerApp` widget that returns the `MaterialApp`.
+  - `main.dart` should only contain `void main() => runApp(ShadowPlayTogglerApp());`
 2. **Create `lib/screens/home_screen.dart`**
   - Move the placeholder UI (centered title text) into `HomeScreen` widget.
   - `MaterialApp` in `app.dart` should use `HomeScreen` as its `home:`.

@@ -221,13 +221,11 @@ A good interaction style is “tool-like, not gamer flashy.”
 
 ## **Project Title**
 
-**NVIDIA Capture Exclusion Manager**
-
-Working title: **ShadowPlay Exclusion Manager**
+**ShadowPlay Toggler**
 
 ## **Project Summary**
 
-NVIDIA Capture Exclusion Manager is a Windows desktop application built with Flutter that provides a focused user interface for managing per-application NVIDIA capture exclusions. The app allows users to add desktop applications or games to a managed exclusion list and writes the relevant NVIDIA DRS profile setting for those applications through NVAPI. The application is not intended to replace NVIDIA’s overlay or recording software; it is a specialized front-end for editing profile-based capture exclusion behavior.
+ShadowPlay Toggler is a Windows desktop application built with Flutter that provides a focused user interface for managing per-application NVIDIA capture exclusions. The app allows users to add desktop applications or games to a managed exclusion list and writes the relevant NVIDIA DRS profile setting for those applications through NVAPI. The application is not intended to replace NVIDIA’s overlay or recording software; it is a specialized front-end for editing profile-based capture exclusion behavior.
 
 ## **Problem Statement**
 

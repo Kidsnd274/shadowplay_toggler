@@ -1,6 +1,6 @@
 ---
 name: Feature Breakdown Plans
-overview: Break the NVIDIA Capture Exclusion Manager project (described in design.md) into ~25 small, independently buildable feature plans, each stored as a markdown file in a plans/ folder.
+overview: Break the ShadowPlay Toggler project (described in design.md) into ~25 small, independently buildable feature plans, each stored as a markdown file in a plans/ folder.
 todos:
   - id: create-plans-dir
     content: Create plans/ directory
@@ -32,7 +32,7 @@ todos:
 isProject: false
 ---
 
-# Feature Breakdown for NVIDIA Capture Exclusion Manager
+# Feature Breakdown for ShadowPlay Toggler
 
 The project in `design.md` describes a Flutter Windows desktop app with a native C/C++ NVAPI bridge. The current codebase is just the default Flutter counter template (with a broken `main.dart`). I will create ~25 small plan files in `plans/`, ordered by dependency so subagents can build them roughly in sequence.
 

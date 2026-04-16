@@ -1,17 +1,22 @@
-# shadowplay_toggler
+# ShadowPlay Toggler
 
-A new Flutter project.
+Manage per-application NVIDIA capture/overlay exclusions via DRS profiles.
 
-## Getting Started
+## Overview
 
-This project is a starting point for a Flutter application.
+This tool provides a desktop UI for managing NVIDIA ShadowPlay and overlay
+capture exclusions on a per-application basis, using NVIDIA Driver Settings
+(DRS/NVAPI) profiles under the hood.
 
-A few resources to get you started if this is your first Flutter project:
+## Platform
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Windows only.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Tech Stack
+
+- **UI:** Flutter desktop (Windows)
+- **Native bridge:** C/C++ NVAPI integration via FFI
+
+## Status
+
+In development.

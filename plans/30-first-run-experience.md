@@ -25,7 +25,7 @@ On first launch, the Managed list is empty. The user needs to understand what th
    - Create `lib/widgets/welcome_overlay.dart`.
    - Shown as a modal overlay or a full-screen page on first launch.
    - Content:
-     - App logo/name: "NVIDIA Capture Exclusion Manager"
+     - App logo/name: "ShadowPlay Toggler"
      - Brief explanation (2-3 sentences):
        "This app helps you manage which programs are excluded from NVIDIA's overlay and capture features (ShadowPlay, Instant Replay). Add programs to prevent NVIDIA from recording or overlaying on them."
      - Steps the user can take:
