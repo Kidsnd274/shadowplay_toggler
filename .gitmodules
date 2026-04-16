@@ -1,0 +1,3 @@
+[submodule ".\\native\\nvapi_sdk"]
+	path = .\\native\\nvapi_sdk
+	url = https://github.com/NVIDIA/nvapi
