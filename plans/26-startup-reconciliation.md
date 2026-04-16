@@ -87,6 +87,12 @@ This handles the case where driver changes were made outside the app (driver upd
      1. Initialize NVAPI.
      2. Run reconciliation.
      3. If any issues found, store results for display.
+   - Reconciliation reuses the same one-shot native scan function and
+     background-isolate execution described in plan 23's "Performance
+     Considerations". The first frame of the app should render without waiting
+     on reconciliation — show a small "Reconciling…" indicator in the toolbar
+     while the scan runs, and fill in managed-rule status badges as results
+     arrive.
 
 4. **Show reconciliation results**
    - If everything is in sync: no notification needed.
