@@ -7,15 +7,57 @@
 #endif
 
 extern "C" {
-    // Returns 0 on success, -1 if NVAPI is unavailable, -2 on init failure.
-    BRIDGE_API int bridge_initialize();
 
+    // ── Plan 06: Initialize / Shutdown ─────────────────────────────
+    //
+    // bridge_get_error_message returns a pointer to an internal static
+    // buffer. Do NOT pass it to bridge_free_json.
+
+    BRIDGE_API int  bridge_initialize();
     BRIDGE_API void bridge_shutdown();
-
-    // Returns 1 if initialized, 0 if not.
-    BRIDGE_API int bridge_is_initialized();
-
-    // Converts an NvAPI status code to a human-readable string.
-    // Returns a pointer to a static buffer (safe for FFI).
+    BRIDGE_API int  bridge_is_initialized();
     BRIDGE_API const char* bridge_get_error_message(int nvapi_status);
+
+    // ── Plan 07: DRS Session Management ────────────────────────────
+
+    BRIDGE_API int bridge_create_session();
+    BRIDGE_API int bridge_load_settings();
+    BRIDGE_API int bridge_save_settings();
+    BRIDGE_API int bridge_destroy_session();
+    BRIDGE_API int bridge_open_session();
+
+    // ── Plan 08: Enumerate Profiles ────────────────────────────────
+    //
+    // All functions returning const char* JSON below allocate on the
+    // heap. The caller MUST pass the pointer to bridge_free_json when
+    // done.
+
+    BRIDGE_API int  bridge_get_profile_count(int* outCount);
+    BRIDGE_API const char* bridge_get_all_profiles_json();
+    BRIDGE_API void bridge_free_json(const char* json);
+
+    // ── Plan 09: Enumerate Applications ────────────────────────────
+
+    BRIDGE_API const char* bridge_get_profile_apps_json(int profileIndex);
+    BRIDGE_API const char* bridge_find_application(const char* appName);
+    BRIDGE_API const char* bridge_get_base_profile_apps_json();
+
+    // ── Plan 10: Get/Set/Delete/Restore Settings ───────────────────
+
+    BRIDGE_API const char* bridge_get_setting(int profileIndex, unsigned int settingId);
+    BRIDGE_API int bridge_set_dword_setting(int profileIndex, unsigned int settingId, unsigned int value);
+    BRIDGE_API int bridge_delete_setting(int profileIndex, unsigned int settingId);
+    BRIDGE_API int bridge_restore_setting_default(int profileIndex, unsigned int settingId);
+    BRIDGE_API int bridge_create_profile(const char* profileName);
+    BRIDGE_API int bridge_add_application(int profileIndex, const char* appName);
+    BRIDGE_API const char* bridge_apply_exclusion(const char* appName);
+
+    // ── Plan 11: Backup / Restore ──────────────────────────────────
+    //
+    // bridge_get_default_backup_path returns a pointer to an internal
+    // static buffer. Do NOT pass it to bridge_free_json.
+
+    BRIDGE_API int bridge_export_settings(const char* filePath);
+    BRIDGE_API int bridge_import_settings(const char* filePath);
+    BRIDGE_API const char* bridge_get_default_backup_path();
 }

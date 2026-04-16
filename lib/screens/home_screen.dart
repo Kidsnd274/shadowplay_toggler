@@ -4,8 +4,21 @@ import '../constants/app_constants.dart';
 import '../providers/nvapi_provider.dart';
 import '../models/nvapi_state.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      ref.read(nvapiProvider.notifier).initialize();
+    });
+  }
 
   String _stateLabel(NvapiState state) => switch (state) {
         NvapiUninitialized() => 'Uninitialized',
@@ -15,7 +28,7 @@ class HomeScreen extends ConsumerWidget {
       };
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final nvapiState = ref.watch(nvapiProvider);
 
     return Scaffold(
