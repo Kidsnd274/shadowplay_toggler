@@ -52,6 +52,26 @@ extern "C" {
     BRIDGE_API int bridge_add_application(int profileIndex, const char* appName);
     BRIDGE_API const char* bridge_apply_exclusion(const char* appName);
 
+    // ── Plan 22: Remove Exclusion ──────────────────────────────────
+    //
+    // Clears the capture-exclusion setting override on whatever profile
+    // the exe is currently attached to. Uses RestoreProfileDefaultSetting
+    // when the setting has a NVIDIA-predefined default for this profile,
+    // DeleteProfileSetting otherwise. NEVER deletes the profile or
+    // detaches the application. Saves settings on success.
+
+    BRIDGE_API const char* bridge_clear_exclusion(const char* appName);
+
+    // ── Plan 23: Scan Exclusion Rules ──────────────────────────────
+    //
+    // Single-crossing full DRS walk. Enumerates every profile, queries
+    // the requested setting, collects the attached applications for the
+    // profiles that carry the setting, and returns the whole thing as a
+    // single JSON document. Also reports the Base Profile's setting
+    // state separately so callers can surface inherited behaviour.
+
+    BRIDGE_API const char* bridge_scan_exclusion_rules(unsigned int settingId);
+
     // ── Plan 11: Backup / Restore ──────────────────────────────────
     //
     // bridge_get_default_backup_path returns a pointer to an internal

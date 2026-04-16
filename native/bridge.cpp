@@ -36,6 +36,19 @@ static char g_backup_path_buffer[MAX_PATH * 2] = {};
 
 static const char* OOM_JSON = "{\"error\":\"out of memory\"}";
 
+// Build a success=false JSON payload that includes the raw NVAPI status so
+// the Dart side can distinguish recoverable user errors (e.g. missing admin
+// privilege, status -137) from generic failures. Keep the schema compatible
+// with older callers that only read `success` and `error`.
+static std::string build_error_json(const char* error, int nvapiStatus) {
+    std::string out = "{\"success\":false,\"error\":\"";
+    out += error;
+    out += "\",\"nvapiStatus\":";
+    out += std::to_string(nvapiStatus);
+    out += "}";
+    return out;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 static std::wstring utf8_to_wide(const char* utf8) {
@@ -532,10 +545,12 @@ const char* bridge_apply_exclusion(const char* appName) {
             status = NvAPI_DRS_CreateProfile(g_session, &profile, &hProfile);
             bridge_log("  CreateProfile -> %d", static_cast<int>(status));
             if (status != NVAPI_OK)
-                return alloc_json("{\"success\":false,\"error\":\"failed to create profile\"}");
+                return alloc_json(build_error_json(
+                    "failed to create profile", static_cast<int>(status)));
             created = true;
         } else if (status != NVAPI_OK) {
-            return alloc_json("{\"success\":false,\"error\":\"failed to find profile\"}");
+            return alloc_json(build_error_json(
+                "failed to find profile", static_cast<int>(status)));
         }
 
         NVDRS_APPLICATION app = {};
@@ -545,7 +560,8 @@ const char* bridge_apply_exclusion(const char* appName) {
         status = NvAPI_DRS_CreateApplication(g_session, hProfile, &app);
         bridge_log("  CreateApplication -> %d", static_cast<int>(status));
         if (status != NVAPI_OK && status != NVAPI_EXECUTABLE_ALREADY_IN_USE)
-            return alloc_json("{\"success\":false,\"error\":\"failed to add application\"}");
+            return alloc_json(build_error_json(
+                "failed to add application", static_cast<int>(status)));
     }
 
     // Look up the *real* profile name and predefined flag so the Dart side
@@ -585,12 +601,14 @@ const char* bridge_apply_exclusion(const char* appName) {
     status = NvAPI_DRS_SetSetting(g_session, hProfile, &setting);
     bridge_log("  SetSetting(0x%08X) -> %d", SETTING_CAPTURE_EXCLUSION, static_cast<int>(status));
     if (status != NVAPI_OK)
-        return alloc_json("{\"success\":false,\"error\":\"failed to set setting\"}");
+        return alloc_json(build_error_json(
+            "failed to set setting", static_cast<int>(status)));
 
     status = NvAPI_DRS_SaveSettings(g_session);
     bridge_log("  SaveSettings -> %d", static_cast<int>(status));
     if (status != NVAPI_OK)
-        return alloc_json("{\"success\":false,\"error\":\"failed to save settings\"}");
+        return alloc_json(build_error_json(
+            "failed to save settings", static_cast<int>(status)));
 
     std::string safeName = escape_json_string(realProfileName);
     std::string json =
@@ -611,6 +629,281 @@ const char* bridge_apply_exclusion(const char* appName) {
     } else {
         json += ",\"previousValue\":null";
     }
+    json += "}";
+    return alloc_json(json);
+}
+
+// ── Plan 22: Remove Exclusion ──────────────────────────────────────
+
+const char* bridge_clear_exclusion(const char* appName) {
+    bridge_log("bridge_clear_exclusion(\"%s\")", appName ? appName : "(null)");
+    if (!g_session || !appName)
+        return alloc_json("{\"success\":false,\"error\":\"invalid args\"}");
+
+    NvAPI_UnicodeString wideAppName = {};
+    utf8_to_nvu16(appName, wideAppName, NVAPI_UNICODE_STRING_MAX);
+
+    NvDRSProfileHandle hProfile = 0;
+    NVDRS_APPLICATION existingApp = {};
+    existingApp.version = NVDRS_APPLICATION_VER;
+
+    NvAPI_Status status = NvAPI_DRS_FindApplicationByName(
+        g_session, wideAppName, &hProfile, &existingApp);
+    bridge_log("  FindApplicationByName -> %d", static_cast<int>(status));
+
+    if (status == NVAPI_EXECUTABLE_NOT_FOUND || status == NVAPI_PROFILE_NOT_FOUND) {
+        return alloc_json(
+            "{\"success\":true,\"action\":\"not_found\""
+            ",\"profileName\":\"\"}");
+    }
+    if (status != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "find failed", static_cast<int>(status)));
+    }
+
+    NVDRS_PROFILE profileInfo = {};
+    profileInfo.version = NVDRS_PROFILE_VER;
+    NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+    std::string profileName = nvu16_to_utf8(profileInfo.profileName);
+
+    NVDRS_SETTING current = {};
+    current.version = NVDRS_SETTING_VER;
+    NvAPI_Status getStatus = NvAPI_DRS_GetSetting(
+        g_session, hProfile, SETTING_CAPTURE_EXCLUSION, &current);
+    bridge_log("  GetSetting -> %d", static_cast<int>(getStatus));
+
+    if (getStatus == NVAPI_SETTING_NOT_FOUND) {
+        // Nothing to clear.
+        std::string safe = escape_json_string(profileName);
+        std::string json = "{\"success\":true,\"action\":\"not_set\""
+                           ",\"profileName\":\"" + safe + "\"}";
+        return alloc_json(json);
+    }
+    if (getStatus != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "get setting failed", static_cast<int>(getStatus)));
+    }
+
+    const char* action = "deleted";
+    if (current.isPredefinedValid) {
+        // NVIDIA ships a predefined value for this setting on this profile;
+        // restore that value so inherited behaviour is preserved.
+        status = NvAPI_DRS_RestoreProfileDefaultSetting(
+            g_session, hProfile, SETTING_CAPTURE_EXCLUSION);
+        bridge_log("  RestoreProfileDefaultSetting -> %d", static_cast<int>(status));
+        action = "restored";
+    } else {
+        status = NvAPI_DRS_DeleteProfileSetting(
+            g_session, hProfile, SETTING_CAPTURE_EXCLUSION);
+        bridge_log("  DeleteProfileSetting -> %d", static_cast<int>(status));
+    }
+
+    if (status != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "clear failed", static_cast<int>(status)));
+    }
+
+    status = NvAPI_DRS_SaveSettings(g_session);
+    bridge_log("  SaveSettings -> %d", static_cast<int>(status));
+    if (status != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "save failed", static_cast<int>(status)));
+    }
+
+    std::string safe = escape_json_string(profileName);
+    std::string json = "{\"success\":true,\"action\":\"";
+    json += action;
+    json += "\",\"profileName\":\"";
+    json += safe;
+    json += "\"}";
+    return alloc_json(json);
+}
+
+// ── Plan 23: Scan Exclusion Rules ──────────────────────────────────
+
+// Emit a single rule tuple as JSON into `out`. Does not add commas; the
+// caller is responsible for separators.
+static void append_rule_json(std::string& out,
+                             const std::string& profileName,
+                             bool profileIsPredefined,
+                             const std::string& appExePath,
+                             bool appIsPredefined,
+                             unsigned int currentValue,
+                             unsigned int predefinedValue,
+                             bool isCurrentPredefined,
+                             bool isPredefinedValid,
+                             NVDRS_SETTING_LOCATION location) {
+    char curHex[16], preHex[16];
+    _snprintf_s(curHex, sizeof(curHex), _TRUNCATE, "0x%08X", currentValue);
+    _snprintf_s(preHex, sizeof(preHex), _TRUNCATE, "0x%08X", predefinedValue);
+
+    const char* loc = "unknown";
+    switch (location) {
+        case NVDRS_CURRENT_PROFILE_LOCATION: loc = "current_profile"; break;
+        case NVDRS_GLOBAL_PROFILE_LOCATION:  loc = "global_profile";  break;
+        case NVDRS_BASE_PROFILE_LOCATION:    loc = "base_profile";    break;
+        case NVDRS_DEFAULT_PROFILE_LOCATION: loc = "default_profile"; break;
+    }
+
+    out += "{\"profileName\":\"";
+    out += escape_json_string(profileName);
+    out += "\",\"profileIsPredefined\":";
+    out += profileIsPredefined ? "true" : "false";
+    out += ",\"appExePath\":\"";
+    out += escape_json_string(appExePath);
+    out += "\",\"appIsPredefined\":";
+    out += appIsPredefined ? "true" : "false";
+    out += ",\"currentValue\":\"";
+    out += curHex;
+    out += "\",\"predefinedValue\":\"";
+    out += preHex;
+    out += "\",\"isCurrentPredefined\":";
+    out += isCurrentPredefined ? "true" : "false";
+    out += ",\"isPredefinedValid\":";
+    out += isPredefinedValid ? "true" : "false";
+    out += ",\"settingLocation\":\"";
+    out += loc;
+    out += "\"}";
+}
+
+const char* bridge_scan_exclusion_rules(unsigned int settingId) {
+    bridge_log("bridge_scan_exclusion_rules(0x%08X)", settingId);
+    if (!g_session) return alloc_json("{\"error\":\"no session\"}");
+
+    LARGE_INTEGER freq = {}, startCounter = {}, endCounter = {};
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&startCounter);
+
+    NvU32 profileCount = 0;
+    NvAPI_Status status = NvAPI_DRS_GetNumProfiles(g_session, &profileCount);
+    if (status != NVAPI_OK)
+        return alloc_json("{\"error\":\"failed to get profile count\"}");
+
+    std::string rulesJson = "[";
+    bool firstRule = true;
+    NvU32 scannedProfiles = 0;
+    NvU32 settingsFound = 0;
+
+    for (NvU32 i = 0; i < profileCount; i++) {
+        NvDRSProfileHandle hProfile = 0;
+        status = NvAPI_DRS_EnumProfiles(g_session, i, &hProfile);
+        if (status != NVAPI_OK) continue;
+        scannedProfiles++;
+
+        NVDRS_PROFILE profileInfo = {};
+        profileInfo.version = NVDRS_PROFILE_VER;
+        status = NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+        if (status != NVAPI_OK) continue;
+
+        NVDRS_SETTING setting = {};
+        setting.version = NVDRS_SETTING_VER;
+        status = NvAPI_DRS_GetSetting(g_session, hProfile, settingId, &setting);
+        if (status != NVAPI_OK) continue;  // profile doesn't carry this setting
+        settingsFound++;
+
+        std::string profileName = nvu16_to_utf8(profileInfo.profileName);
+        bool profilePredef = profileInfo.isPredefined != 0;
+
+        if (profileInfo.numOfApps == 0) {
+            // Profile carries the setting but has no attached exe — rare but
+            // possible. Emit a synthetic rule with an empty exePath so the
+            // caller can still surface it (e.g. a Base / Global profile).
+            if (!firstRule) rulesJson += ",";
+            firstRule = false;
+            append_rule_json(rulesJson, profileName, profilePredef,
+                             "", false,
+                             setting.u32CurrentValue,
+                             setting.u32PredefinedValue,
+                             setting.isCurrentPredefined != 0,
+                             setting.isPredefinedValid != 0,
+                             setting.settingLocation);
+            continue;
+        }
+
+        std::vector<NVDRS_APPLICATION> apps(profileInfo.numOfApps);
+        for (auto& app : apps) {
+            memset(&app, 0, sizeof(app));
+            app.version = NVDRS_APPLICATION_VER;
+        }
+
+        NvU32 appCount = profileInfo.numOfApps;
+        NvAPI_Status enumStatus = NvAPI_DRS_EnumApplications(
+            g_session, hProfile, 0, &appCount, apps.data());
+        if (enumStatus != NVAPI_OK) continue;
+
+        for (NvU32 a = 0; a < appCount; a++) {
+            std::string exePath = nvu16_to_utf8(apps[a].appName);
+            bool appPredef = apps[a].isPredefined != 0;
+
+            if (!firstRule) rulesJson += ",";
+            firstRule = false;
+            append_rule_json(rulesJson, profileName, profilePredef,
+                             exePath, appPredef,
+                             setting.u32CurrentValue,
+                             setting.u32PredefinedValue,
+                             setting.isCurrentPredefined != 0,
+                             setting.isPredefinedValid != 0,
+                             setting.settingLocation);
+        }
+    }
+
+    rulesJson += "]";
+
+    // Base profile inspection — treated as inherited behaviour.
+    std::string baseJson = "null";
+    {
+        NvDRSProfileHandle hBase = 0;
+        NvAPI_Status bStatus = NvAPI_DRS_GetBaseProfile(g_session, &hBase);
+        if (bStatus == NVAPI_OK && hBase) {
+            NVDRS_PROFILE baseInfo = {};
+            baseInfo.version = NVDRS_PROFILE_VER;
+            bStatus = NvAPI_DRS_GetProfileInfo(g_session, hBase, &baseInfo);
+
+            NVDRS_SETTING baseSetting = {};
+            baseSetting.version = NVDRS_SETTING_VER;
+            NvAPI_Status sStatus = NvAPI_DRS_GetSetting(
+                g_session, hBase, settingId, &baseSetting);
+
+            if (bStatus == NVAPI_OK && sStatus == NVAPI_OK) {
+                std::string baseName = (baseInfo.profileName[0] == 0)
+                    ? "Base Profile"
+                    : nvu16_to_utf8(baseInfo.profileName);
+                std::string tmp;
+                append_rule_json(tmp, baseName, baseInfo.isPredefined != 0,
+                                 "", false,
+                                 baseSetting.u32CurrentValue,
+                                 baseSetting.u32PredefinedValue,
+                                 baseSetting.isCurrentPredefined != 0,
+                                 baseSetting.isPredefinedValid != 0,
+                                 baseSetting.settingLocation);
+                baseJson = tmp;
+            }
+        }
+    }
+
+    QueryPerformanceCounter(&endCounter);
+    double durationMs = 0.0;
+    if (freq.QuadPart > 0) {
+        durationMs = (endCounter.QuadPart - startCounter.QuadPart) * 1000.0
+                     / static_cast<double>(freq.QuadPart);
+    }
+    int durationMsInt = static_cast<int>(durationMs + 0.5);
+    bridge_log("  scan complete: %u profiles, %u settings, %d ms",
+               scannedProfiles, settingsFound, durationMsInt);
+    if (durationMsInt > 2000) {
+        bridge_log("  WARNING: scan exceeded 2000 ms");
+    }
+
+    std::string json = "{\"durationMs\":";
+    json += std::to_string(durationMsInt);
+    json += ",\"profilesScanned\":";
+    json += std::to_string(scannedProfiles);
+    json += ",\"settingsFound\":";
+    json += std::to_string(settingsFound);
+    json += ",\"rules\":";
+    json += rulesJson;
+    json += ",\"baseProfile\":";
+    json += baseJson;
     json += "}";
     return alloc_json(json);
 }

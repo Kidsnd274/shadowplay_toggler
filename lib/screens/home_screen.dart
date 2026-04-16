@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/nvapi_state.dart';
+import '../providers/database_provider.dart';
 import '../providers/nvapi_provider.dart';
+import '../providers/scan_provider.dart';
+import '../widgets/add_program_dialog.dart';
 import '../widgets/app_toolbar.dart';
+import '../widgets/backup_dialog.dart';
+import '../widgets/exe_drop_target.dart';
 import '../widgets/left_pane.dart';
 import '../widgets/right_pane.dart';
+import '../widgets/scan_controller.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -17,9 +23,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
+    Future.microtask(() async {
       ref.read(nvapiProvider.notifier).initialize();
+      await _restoreLastScanAt();
     });
+  }
+
+  Future<void> _restoreLastScanAt() async {
+    final repo = ref.read(appStateRepositoryProvider);
+    final raw = await repo.getValue('last_scan_at');
+    if (raw == null) return;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed != null && mounted) {
+      ref.read(lastScanAtProvider.notifier).state = parsed;
+    }
   }
 
   void _showNotImplemented(String feature) {
@@ -31,35 +48,73 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  void _onScanProfiles() => _showNotImplemented('Scan Profiles');
+  bool _assertNvapiReady() {
+    final state = ref.read(nvapiProvider);
+    if (state is NvapiReady) return true;
+    final message = switch (state) {
+      NvapiInitializing() =>
+        'NVAPI is still initialising — try again in a moment.',
+      NvapiError(message: final m) => 'NVAPI unavailable: $m',
+      _ => 'NVAPI is not ready yet.',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+    return false;
+  }
+
+  Future<void> _onAddProgram() async {
+    if (!_assertNvapiReady()) return;
+    final result = await runAddProgramFlow(context, ref);
+    if (!mounted) return;
+    if (result != null && result.success) {
+      final msg = result.exclusionAlreadyApplied
+          ? 'Exclusion already applied for ${result.exeName}.'
+          : 'Added exclusion for ${result.exeName}.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
+  Future<void> _onScanProfiles() async {
+    if (!_assertNvapiReady()) return;
+    await runScan(context, ref);
+  }
+
+  Future<void> _onBackup() async {
+    if (!_assertNvapiReady()) return;
+    await showBackupDialog(context);
+  }
 
   @override
   Widget build(BuildContext context) {
     final nvapiState = ref.watch(nvapiProvider);
 
     return Scaffold(
-      body: Column(
-        children: [
-          AppToolbar(
-            onScanProfiles: _onScanProfiles,
-            onAddProgram: () => _showNotImplemented('Add Program'),
-            onBackup: () => _showNotImplemented('Backup'),
-            onSettings: () => _showNotImplemented('Settings'),
-          ),
-          if (nvapiState is NvapiError)
-            _NvapiBanner(message: nvapiState.message),
-          Expanded(
-            child: Row(
-              children: [
-                Flexible(
-                  flex: 1,
-                  child: LeftPane(onScanProfiles: _onScanProfiles),
-                ),
-                const Flexible(flex: 2, child: RightPane()),
-              ],
+      body: ExeDropTarget(
+        child: Column(
+          children: [
+            AppToolbar(
+              onScanProfiles: _onScanProfiles,
+              onAddProgram: _onAddProgram,
+              onBackup: _onBackup,
+              onSettings: () => _showNotImplemented('Settings'),
             ),
-          ),
-        ],
+            if (nvapiState is NvapiError)
+              _NvapiBanner(message: nvapiState.message),
+            const ScanProgressBar(),
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    flex: 1,
+                    child: LeftPane(onScanProfiles: _onScanProfiles),
+                  ),
+                  const Flexible(flex: 2, child: RightPane()),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

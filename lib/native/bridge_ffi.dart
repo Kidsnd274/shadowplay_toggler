@@ -19,6 +19,7 @@ typedef _SetDwordC = Int32 Function(
 typedef _SettingOpC = Int32 Function(Int32 profileIndex, Uint32 settingId);
 typedef _StrReturnsIntC = Int32 Function(Pointer<Utf8> str);
 typedef _AddAppC = Int32 Function(Int32 profileIndex, Pointer<Utf8> appName);
+typedef _ScanRulesC = Pointer<Utf8> Function(Uint32 settingId);
 
 // ── Dart signatures ─────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ typedef _SetDwordDart = int Function(
 typedef _SettingOpDart = int Function(int profileIndex, int settingId);
 typedef _StrReturnsIntDart = int Function(Pointer<Utf8> str);
 typedef _AddAppDart = int Function(int profileIndex, Pointer<Utf8> appName);
+typedef _ScanRulesDart = Pointer<Utf8> Function(int settingId);
 
 class BridgeFfi {
   late final DynamicLibrary _lib;
@@ -72,6 +74,8 @@ class BridgeFfi {
   late final _StrReturnsIntDart _createProfile;
   late final _AddAppDart _addApplication;
   late final _PtrStrDart _applyExclusion;
+  late final _PtrStrDart _clearExclusion;
+  late final _ScanRulesDart _scanExclusionRules;
 
   // Backup
   late final _StrReturnsIntDart _exportSettings;
@@ -143,6 +147,11 @@ class BridgeFfi {
         _lib.lookupFunction<_AddAppC, _AddAppDart>('bridge_add_application');
     _applyExclusion =
         _lib.lookupFunction<_PtrStrC, _PtrStrDart>('bridge_apply_exclusion');
+    _clearExclusion =
+        _lib.lookupFunction<_PtrStrC, _PtrStrDart>('bridge_clear_exclusion');
+    _scanExclusionRules =
+        _lib.lookupFunction<_ScanRulesC, _ScanRulesDart>(
+            'bridge_scan_exclusion_rules');
 
     // Backup
     _exportSettings = _lib
@@ -231,6 +240,21 @@ class BridgeFfi {
       malloc.free(namePtr);
     }
   }
+
+  String? clearExclusion(String appName) {
+    final namePtr = appName.toNativeUtf8();
+    try {
+      return _readJson(_clearExclusion(namePtr));
+    } finally {
+      malloc.free(namePtr);
+    }
+  }
+
+  /// Full DRS walk collecting every profile that carries [settingId].
+  /// Returns the raw JSON document produced by the native side; see
+  /// `plans/23-scan-profiles-feature.md` for the shape.
+  String? scanExclusionRules(int settingId) =>
+      _readJson(_scanExclusionRules(settingId));
 
   int exportSettings(String filePath) {
     final pathPtr = filePath.toNativeUtf8();

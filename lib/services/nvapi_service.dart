@@ -149,6 +149,20 @@ class NvapiService {
     );
   }
 
+  Map<String, dynamic>? clearExclusion(String exePath) {
+    return _parseJson(
+      _bridge.clearExclusion(exePath),
+      (d) => d as Map<String, dynamic>,
+    );
+  }
+
+  // ── Scan ────────────────────────────────────────────────────────
+
+  /// Returns the raw JSON document from the native scan function. The
+  /// service layer parses this (possibly off the UI isolate).
+  String? scanExclusionRulesJson(int settingId) =>
+      _bridge.scanExclusionRules(settingId);
+
   // ── Backup / Restore ───────────────────────────────────────────
 
   void exportSettings(String filePath) {

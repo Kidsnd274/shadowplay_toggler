@@ -7,29 +7,54 @@ class NvapiNotifier extends StateNotifier<NvapiState> {
 
   NvapiNotifier(this._bridge) : super(const NvapiUninitialized());
 
+  /// Initialize NVAPI and open a DRS session.
+  ///
+  /// The session is created + `LoadSettings` populated for the lifetime of
+  /// the process; downstream features (add program, scan, backup, remove)
+  /// all assume a session is already live.
   Future<void> initialize() async {
     state = const NvapiInitializing();
     try {
-      final result = _bridge.initialize();
-      if (result == 0) {
-        state = const NvapiReady();
-      } else if (result == -1) {
+      final initResult = _bridge.initialize();
+      if (initResult == -1) {
         state = const NvapiError('No NVIDIA GPU or driver found');
-      } else {
-        state = NvapiError('NVAPI init failed (code $result)');
+        return;
       }
+      if (initResult != 0) {
+        state = NvapiError('NVAPI init failed (code $initResult)');
+        return;
+      }
+
+      final sessionResult = _bridge.openSession();
+      if (sessionResult != 0) {
+        final msg = _bridge.getErrorMessage(sessionResult);
+        state = NvapiError(
+          'Failed to open DRS session: $msg (code $sessionResult)',
+        );
+        return;
+      }
+
+      state = const NvapiReady();
     } catch (e) {
       state = NvapiError('Bridge error: $e');
     }
   }
 
   void shutdown() {
+    try {
+      _bridge.destroySession();
+    } catch (_) {
+      // Non-fatal; the DLL will clean up on shutdown anyway.
+    }
     _bridge.shutdown();
     state = const NvapiUninitialized();
   }
 
   @override
   void dispose() {
+    try {
+      _bridge.destroySession();
+    } catch (_) {}
     _bridge.shutdown();
     super.dispose();
   }

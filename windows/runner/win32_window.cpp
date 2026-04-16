@@ -18,6 +18,13 @@ namespace {
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
+// Minimum window dimensions in logical (DPI 96) pixels. Chosen so the
+// toolbar, both panes and the right-hand detail view all render without
+// overflow at 100% DPI. Scaled by the current monitor's DPI inside the
+// WM_GETMINMAXINFO handler.
+constexpr int kMinWindowWidthLogical  = 900;
+constexpr int kMinWindowHeightLogical = 560;
+
 /// Registry key for app theme preference.
 ///
 /// A value of 0 indicates apps should use dark mode. A non-zero or missing
@@ -212,6 +219,16 @@ Win32Window::MessageHandler(HWND hwnd,
         SetFocus(child_content_);
       }
       return 0;
+
+    case WM_GETMINMAXINFO: {
+      auto* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+      double scale = dpi / 96.0;
+      mmi->ptMinTrackSize.x = Scale(kMinWindowWidthLogical, scale);
+      mmi->ptMinTrackSize.y = Scale(kMinWindowHeightLogical, scale);
+      return 0;
+    }
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
       UpdateTheme(hwnd);

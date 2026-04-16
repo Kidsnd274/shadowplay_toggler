@@ -11,4 +11,17 @@
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
     </application>
   </compatibility>
+  <!--
+    ShadowPlay Toggler writes to NVIDIA DRS profile settings (including the
+    undocumented capture-exclusion setting 0x809D5F60). NVAPI returns
+    NVAPI_INVALID_USER_PRIVILEGE (-137) when these writes are attempted
+    without elevation, so the app must be launched as Administrator.
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
 </assembly>
