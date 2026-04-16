@@ -7,32 +7,20 @@ Set up the CMake build configuration and project scaffolding for the native C/C+
 ## Prerequisites
 
 - Plan 02 (Project Structure) completed.
-- NVAPI SDK downloaded (https://developer.nvidia.com/rtx/path-tracing/nvapi/get-started). The SDK provides header files and `nvapi64.lib`.
+- NVAPI SDK added as a git submodule from https://github.com/NVIDIA/nvapi at `native/nvapi_sdk/`.
 
 ## Background
 
 The design calls for a thin native DLL that sits between Flutter (via `dart:ffi`) and NVAPI. This plan sets up the build system only; actual NVAPI function implementations come in plans 06-11.
 
+The NVAPI SDK is integrated as a GitHub submodule (from `https://github.com/NVIDIA/nvapi`), so developers always have access to the latest updates while maintaining precise version control. After cloning, run `git submodule update --init --recursive` to fetch the SDK.
+
 ## Tasks
 
-1. **Download and place NVAPI SDK**
-   - Create directory `native/nvapi_sdk/` at the project root.
-   - Place the NVAPI SDK headers and library files there:
-     ```
-     native/nvapi_sdk/
-     ├── nvapi.h
-     ├── nvapi_lite_common.h
-     ├── nvapi_lite_salstart.h
-     ├── nvapi_lite_salend.h
-     ├── nvapi_lite_stereo.h
-     ├── nvapi_lite_sli.h
-     ├── nvapi_lite_surround.h
-     ├── NvApiDriverSettings.h
-     ├── amd64/
-     │   └── nvapi64.lib
-     └── ... (other SDK files)
-     ```
-   - Add a `native/nvapi_sdk/README.md` explaining that these files come from NVIDIA's NVAPI SDK and are not redistributable; developers must download them separately.
+1. **NVAPI SDK (git submodule)**
+   - The SDK is already added as a git submodule at `native/nvapi_sdk/`.
+   - After cloning the repo, developers must run: `git submodule update --init --recursive`
+   - The submodule provides headers (`nvapi.h`, etc.) and the 64-bit library (`amd64/nvapi64.lib`).
 
 2. **Create the bridge source directory**
    ```
@@ -81,9 +69,9 @@ The design calls for a thin native DLL that sits between Flutter (via `dart:ffi`
    - Ensure `shadowplay_bridge.dll` is copied to the Flutter app's build output directory alongside the executable.
    - The DLL must be in the same directory as `shadowplay_toggler.exe` at runtime.
 
-7. **Add `native/` to `.gitignore` exceptions**
-   - Make sure `native/nvapi_sdk/*.lib` and `native/nvapi_sdk/*.h` are either tracked or documented as manual downloads.
-   - Consider gitignoring the SDK files and adding a setup script or instructions.
+7. **Submodule documentation**
+   - The SDK files are managed by the git submodule and do not need to be tracked or gitignored separately.
+   - README should mention running `git submodule update --init --recursive` after cloning.
 
 ## Acceptance Criteria
 
