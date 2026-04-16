@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../constants/app_constants.dart';
-import '../providers/nvapi_provider.dart';
 import '../models/nvapi_state.dart';
+import '../providers/nvapi_provider.dart';
+import '../widgets/app_toolbar.dart';
+import '../widgets/left_pane.dart';
+import '../widgets/right_pane.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -20,33 +22,69 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
   }
 
-  String _stateLabel(NvapiState state) => switch (state) {
-        NvapiUninitialized() => 'Uninitialized',
-        NvapiInitializing() => 'Initializing…',
-        NvapiReady() => 'Ready',
-        NvapiError(message: final msg) => 'Error: $msg',
-      };
+  void _showNotImplemented(String feature) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$feature — not implemented yet'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final nvapiState = ref.watch(nvapiProvider);
 
     return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              AppConstants.appTitle,
-              style: Theme.of(context).textTheme.titleLarge,
+      body: Column(
+        children: [
+          AppToolbar(
+            onScanProfiles: () => _showNotImplemented('Scan Profiles'),
+            onAddProgram: () => _showNotImplemented('Add Program'),
+            onBackup: () => _showNotImplemented('Backup'),
+            onSettings: () => _showNotImplemented('Settings'),
+          ),
+          if (nvapiState is NvapiError)
+            _NvapiBanner(message: nvapiState.message),
+          Expanded(
+            child: Row(
+              children: const [
+                Flexible(flex: 1, child: LeftPane()),
+                Flexible(flex: 2, child: RightPane()),
+              ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              'NVAPI: ${_stateLabel(nvapiState)}',
-              style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NvapiBanner extends StatelessWidget {
+  final String message;
+  const _NvapiBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: theme.colorScheme.error.withValues(alpha: 0.15),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded,
+              size: 18, color: theme.colorScheme.error),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'NVAPI Error: $message',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.error),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -13,7 +13,7 @@ Build the main two-pane layout scaffold with a top toolbar, matching the design 
 
 ```
 +------------------------------------------------------------------+
-| Capture Exclusion Manager                                         |
+| ShadowPlay Toggler                                               |
 | [Scan NVIDIA Profiles] [Add Program] [Backup] [Settings]         |
 +------------------------------+-----------------------------------+
 | Left Pane                    | Right Pane                        |

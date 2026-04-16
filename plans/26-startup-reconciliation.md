@@ -20,7 +20,31 @@ From `design.md`, on launch the app should:
 
 This handles the case where the local DB is lost (app reinstall, data reset) or where driver changes were made outside the app (driver update, manual editing, NPI).
 
+> **Driver-install resilience (important):** The local SQLite database survives driver
+> reinstalls, but the NVIDIA DRS database resets to factory defaults on every driver
+> install (even same-version repair installs). When this happens, *all* custom profiles
+> and settings are wiped. The reconciliation must detect this and offer a bulk re-apply
+> instead of treating each rule as individually orphaned. Detection signals:
+> 1. `last_driver_version` in app_state differs from the current driver version.
+> 2. `drs_profile_hash` in app_state differs from a freshly-computed hash, even when
+>    the version string hasn't changed.
+
 ## Tasks
+
+0. **Detect driver reinstall / DRS reset**
+   - Before per-rule reconciliation, compare the stored `last_driver_version` and
+     `drs_profile_hash` (from plan 13's `app_state` table) against the live driver.
+   - If either has changed:
+     1. Flag the reconciliation as a **DRS reset event**.
+     2. Skip normal per-rule orphan detection; instead mark all managed rules as
+        `needsReapply`.
+     3. After reconciliation, present the user with a single prompt:
+        "Driver change detected — X managed rules need to be re-applied. [Re-apply All] [Review]"
+     4. On "Re-apply All": iterate all managed rules and call the bridge to recreate
+        profiles / settings. Update `last_driver_version` and `drs_profile_hash`.
+     5. On "Review": open the Managed tab with amber status on every rule so the user
+        can selectively re-apply.
+   - If both match, proceed with normal per-rule reconciliation below.
 
 1. **Create `lib/services/reconciliation_service.dart`**
    - Method:
@@ -30,24 +54,31 @@ This handles the case where the local DB is lost (app reinstall, data reset) or 
    - Logic:
      1. Load all managed rules from the local database.
      2. Open NVAPI session and load settings.
-     3. For each managed rule in the local DB:
+     3. Check for DRS reset (task 0 above). If detected, return early with
+        `drsResetDetected: true` and the list of rules needing re-apply.
+     4. For each managed rule in the local DB:
         a. Check if the profile still exists in the driver.
         b. Check if the setting still has the expected value.
         c. Classify:
            - **In sync**: profile exists, setting matches intended value. No action.
            - **Drifted**: profile exists, but setting value changed. Mark as warning.
            - **Missing**: profile does not exist or app is not attached. Mark as orphaned.
-     4. Scan for orphaned app-created profiles (prefix match but not in DB):
+     5. Scan for orphaned app-created profiles (prefix match but not in DB):
         - Auto-recover into the managed rules database.
-     5. Return results.
+     6. Update `last_driver_version` and `drs_profile_hash` in app_state.
+     7. Return results.
 
 2. **Create `lib/models/reconciliation_result.dart`**
    ```dart
    class ReconciliationResult {
+     final bool drsResetDetected;
+     final String? previousDriverVersion;
+     final String? currentDriverVersion;
      final int rulesInSync;
      final int rulesDrifted;
      final int rulesOrphaned;
      final int rulesRecovered;
+     final int rulesNeedingReapply;
      final List<String> warnings;
      final Duration duration;
    }
@@ -86,9 +117,12 @@ This handles the case where the local DB is lost (app reinstall, data reset) or 
 ## Acceptance Criteria
 
 - Reconciliation runs automatically on app startup.
+- **Driver reinstall / DRS reset is detected** via version and hash comparison.
+- When a DRS reset is detected, the user is prompted to re-apply all managed rules in bulk.
 - In-sync rules show green status.
 - Drifted rules are detected and flagged with amber status.
 - Orphaned rules are detected and flagged with red status.
 - Auto-recovery of prefixed profiles works.
+- `last_driver_version` and `drs_profile_hash` are updated after every successful reconciliation.
 - NVAPI failure is handled gracefully with a clear error message.
 - `flutter analyze` reports no errors.

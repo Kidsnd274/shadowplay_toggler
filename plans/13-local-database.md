@@ -57,6 +57,16 @@ The design calls for a hybrid model: NVIDIA's DRS database is the source of trut
    - `first_backup_done` = "true"/"false"
    - `last_scan_timestamp` = ISO 8601
    - `last_driver_version` = string
+   - `drs_profile_hash` = hash of profile names/counts from the last successful reconciliation (see note below)
+
+   > **Driver-install resilience:** The SQLite database persists across NVIDIA driver
+   > reinstalls, but the NVIDIA DRS database resets to factory defaults on each install.
+   > This means every managed rule in our DB could become orphaned overnight. The
+   > `last_driver_version` key lets plan 26's reconciliation detect a version change
+   > and trigger a bulk re-apply flow instead of treating each rule as individually
+   > orphaned. The `drs_profile_hash` provides a secondary signal: even if the driver
+   > version string doesn't change (e.g. same-version repair install), a hash mismatch
+   > indicates the DRS was likely reset.
 
 4. **Create `lib/services/managed_rules_repository.dart`**
    - CRUD operations for managed rules:
