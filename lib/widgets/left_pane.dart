@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/multi_select_provider.dart';
 import '../providers/nvidia_defaults_provider.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/search_provider.dart';
@@ -77,11 +78,16 @@ class _LeftPaneState extends ConsumerState<LeftPane>
       );
       return KeyEventResult.handled;
     }
-    if (event.logicalKey == LogicalKeyboardKey.escape &&
-        _searchFocus.hasFocus) {
-      _searchController.clear();
-      _searchFocus.unfocus();
-      return KeyEventResult.handled;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      if (_searchFocus.hasFocus) {
+        _searchController.clear();
+        _searchFocus.unfocus();
+        return KeyEventResult.handled;
+      }
+      if (ref.read(multiSelectModeProvider)) {
+        exitMultiSelect(ref);
+        return KeyEventResult.handled;
+      }
     }
     return KeyEventResult.ignored;
   }

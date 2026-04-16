@@ -1,13 +1,20 @@
 import 'dart:convert';
 
+import '../models/app_exception.dart';
 import '../models/profile_info.dart';
 import '../native/bridge_ffi.dart';
 
-class NvapiBridgeException implements Exception {
-  final String message;
-  final int? statusCode;
-
-  const NvapiBridgeException(this.message, {this.statusCode});
+/// Thrown by [NvapiService] when the native bridge reports a non-zero
+/// status or returns a failure payload.
+///
+/// Extends [NvapiException] so both newer UI code that catches the typed
+/// [AppException] hierarchy and older code that explicitly catches
+/// `NvapiBridgeException` keep working.
+class NvapiBridgeException extends NvapiException {
+  const NvapiBridgeException(
+    super.message, {
+    super.statusCode,
+  });
 
   @override
   String toString() => 'NvapiBridgeException: $message'
@@ -117,6 +124,13 @@ class NvapiService {
     );
   }
 
+  /// Non-throwing variant of [setDwordSetting]. Returns the native status
+  /// code (0 on success). Use when the caller wants to branch on specific
+  /// NVAPI error codes without an exception in the common path.
+  int setDwordSettingRaw(int profileIndex, int settingId, int value) {
+    return _bridge.setDwordSetting(profileIndex, settingId, value);
+  }
+
   void deleteSetting(int profileIndex, int settingId) {
     _checkStatus(
       _bridge.deleteSetting(profileIndex, settingId),
@@ -124,11 +138,24 @@ class NvapiService {
     );
   }
 
+  /// Non-throwing variant of [deleteSetting].
+  int deleteSettingRaw(int profileIndex, int settingId) {
+    return _bridge.deleteSetting(profileIndex, settingId);
+  }
+
   void restoreSettingDefault(int profileIndex, int settingId) {
     _checkStatus(
       _bridge.restoreSettingDefault(profileIndex, settingId),
       'Restore setting default',
     );
+  }
+
+  /// Non-throwing variant of [restoreSettingDefault]. A non-zero return
+  /// typically means the setting has no NVIDIA-predefined default on this
+  /// profile, in which case the caller should fall back to
+  /// [deleteSettingRaw].
+  int restoreSettingDefaultRaw(int profileIndex, int settingId) {
+    return _bridge.restoreSettingDefault(profileIndex, settingId);
   }
 
   void createProfile(String name) {
@@ -152,6 +179,16 @@ class NvapiService {
   Map<String, dynamic>? clearExclusion(String exePath) {
     return _parseJson(
       _bridge.clearExclusion(exePath),
+      (d) => d as Map<String, dynamic>,
+    );
+  }
+
+  /// Delete the whole DRS profile identified by [profileName]. Refuses to
+  /// operate on NVIDIA-predefined profiles (native layer enforces this).
+  /// Returns the raw response JSON as a map; see `bridge_delete_profile`.
+  Map<String, dynamic>? deleteProfile(String profileName) {
+    return _parseJson(
+      _bridge.deleteProfile(profileName),
       (d) => d as Map<String, dynamic>,
     );
   }

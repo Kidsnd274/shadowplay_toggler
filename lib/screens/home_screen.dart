@@ -2,13 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/nvapi_state.dart';
 import '../providers/database_provider.dart';
+import '../providers/detected_rules_provider.dart';
 import '../providers/nvapi_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/scan_provider.dart';
+import '../services/notification_service.dart';
 import '../widgets/add_program_dialog.dart';
 import '../widgets/app_toolbar.dart';
 import '../widgets/backup_dialog.dart';
 import '../widgets/exe_drop_target.dart';
 import '../widgets/left_pane.dart';
+import '../widgets/reconciliation_banner.dart';
 import '../widgets/right_pane.dart';
 import '../widgets/scan_controller.dart';
 
@@ -20,6 +24,8 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  bool _reconciliationStarted = false;
+
   @override
   void initState() {
     super.initState();
@@ -36,6 +42,51 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final parsed = DateTime.tryParse(raw);
     if (parsed != null && mounted) {
       ref.read(lastScanAtProvider.notifier).state = parsed;
+    }
+  }
+
+  /// Runs the startup reconciliation pass once NVAPI reports ready.
+  /// Guarded by [_reconciliationStarted] so we don't fire twice if
+  /// `NvapiReady` is announced multiple times (initialize() is idempotent
+  /// but the provider may re-emit).
+  Future<void> _runStartupReconciliation() async {
+    if (_reconciliationStarted) return;
+    _reconciliationStarted = true;
+
+    ref.read(isReconcilingProvider.notifier).state = true;
+    try {
+      final service = ref.read(reconciliationServiceProvider);
+      final result = await service.reconcile();
+      if (!mounted) return;
+
+      ref.read(lastReconciliationProvider.notifier).state = result;
+
+      if (result.hasFatalError) {
+        NotificationService.showError(
+          'Reconciliation failed.',
+          details: result.fatalError,
+        );
+        return;
+      }
+
+      // Surface the scan's detected rules into the Detected tab so the
+      // user has a one-click path to adopt them (useful right after a
+      // local-DB loss).
+      ref
+          .read(detectedRulesProvider.notifier)
+          .setRules(result.detectedExternalRules);
+
+      if (!result.drsResetDetected && result.detectedExternalRules.isNotEmpty) {
+        NotificationService.showInfo(
+          '${result.detectedExternalRules.length} existing exclusion rule'
+          '${result.detectedExternalRules.length == 1 ? '' : 's'} found '
+          'outside the app — open the Detected tab to review or adopt.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        ref.read(isReconcilingProvider.notifier).state = false;
+      }
     }
   }
 
@@ -89,6 +140,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final nvapiState = ref.watch(nvapiProvider);
 
+    ref.listen<NvapiState>(nvapiProvider, (prev, next) {
+      if (next is NvapiReady) {
+        _runStartupReconciliation();
+      }
+    });
+
     return Scaffold(
       body: ExeDropTarget(
         child: Column(
@@ -101,6 +158,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             if (nvapiState is NvapiError)
               _NvapiBanner(message: nvapiState.message),
+            const ReconciliationBanner(),
             const ScanProgressBar(),
             Expanded(
               child: Row(

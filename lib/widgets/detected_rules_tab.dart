@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/search_provider.dart';
+import 'adopt_rule_button.dart';
 import 'rule_list_tile.dart';
 
 /// "Detected" tab content: lists driver profiles whose capture-exclusion
@@ -28,19 +29,28 @@ class DetectedRulesTab extends ConsumerWidget {
       return const _NoDetectedState();
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      itemCount: rules.length,
-      itemBuilder: (context, i) {
-        final rule = rules[i];
-        return RuleListTile(
-          rule: rule,
-          sourceBadge: RuleSourceBadge.external,
-          statusColor: const Color(0xFFFFB74D),
-          statusTooltip: 'External rule — source unknown',
-          trailingHint: 'Adopt',
-        );
-      },
+    return Column(
+      children: [
+        const AdoptAllButton(),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: rules.length,
+            itemBuilder: (context, i) {
+              final rule = rules[i];
+              return RuleListTile(
+                rule: rule,
+                sourceBadge: RuleSourceBadge.external,
+                statusColor: const Color(0xFFFFB74D),
+                statusTooltip: 'External rule — source unknown',
+                trailingHint: 'Adopt',
+                onTrailingHintPressed: () =>
+                    adoptRuleInteractive(context, ref, rule),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

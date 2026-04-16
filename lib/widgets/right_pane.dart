@@ -4,10 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
 import '../models/managed_rule.dart';
-import '../models/remove_result.dart';
+import '../providers/managed_rule_actions_provider.dart';
 import '../providers/managed_rules_provider.dart';
-import '../providers/remove_exclusion_provider.dart';
 import '../providers/selected_rule_provider.dart';
+import '../services/notification_service.dart';
+import 'adopt_rule_button.dart';
+import 'advanced_editor.dart';
+import 'confirmation_dialog.dart';
 
 /// Right-hand detail pane.
 ///
@@ -38,8 +41,9 @@ class RightPane extends ConsumerWidget {
         return _ReadOnlyDetail(
           rule: selected,
           subtitle:
-              'External rule — not managed by this app. Adoption will be '
-              'available in a future update.',
+              'External rule — not managed by this app. Adopt it to start '
+              'managing it from here.',
+          showAdopt: true,
         );
     }
   }
@@ -74,23 +78,36 @@ class _EmptyDetail extends StatelessWidget {
 class _ReadOnlyDetail extends StatelessWidget {
   final ExclusionRule rule;
   final String subtitle;
+  final bool showAdopt;
 
-  const _ReadOnlyDetail({required this.rule, required this.subtitle});
+  const _ReadOnlyDetail({
+    required this.rule,
+    required this.subtitle,
+    this.showAdopt = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _HeaderRow(rule: rule),
-          const SizedBox(height: 16),
-          _FieldsBlock(rule: rule),
-          const SizedBox(height: 20),
-          Text(subtitle, style: theme.textTheme.bodySmall),
-        ],
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _HeaderRow(rule: rule),
+            const SizedBox(height: 16),
+            _FieldsBlock(rule: rule),
+            const SizedBox(height: 20),
+            Text(subtitle, style: theme.textTheme.bodySmall),
+            if (showAdopt) ...[
+              const SizedBox(height: 16),
+              AdoptRuleButton(rule: rule),
+            ],
+            const SizedBox(height: 20),
+            AdvancedEditor(rule: rule, allowEdit: false),
+          ],
+        ),
       ),
     );
   }
@@ -103,6 +120,8 @@ class _ManagedRuleDetail extends ConsumerStatefulWidget {
   @override
   ConsumerState<_ManagedRuleDetail> createState() => _ManagedRuleDetailState();
 }
+
+enum _RuleMenuAction { unmanage, deleteProfile }
 
 class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   bool _busy = false;
@@ -125,144 +144,297 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
     );
   }
 
-  Future<void> _confirmRemove() async {
+  bool get _exclusionEnabled =>
+      widget.rule.currentValue == AppConstants.captureDisableValue;
+
+  Future<void> _onToggle(bool enabled) async {
     final managed = _lookupManagedRule();
     if (managed == null) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Remove exclusion for ${managed.exeName}?'),
-        content: const Text(
-          'The capture-exclusion setting will be cleared. The NVIDIA profile '
-          'itself will be left in place, so this executable can be re-excluded '
-          'quickly later.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    await _runRemove(managed, removeFromLocalDb: true);
-  }
-
-  Future<void> _confirmRestoreDefault() async {
-    final managed = _lookupManagedRule();
-    if (managed == null) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Restore default for ${managed.exeName}?'),
-        content: const Text(
-          "The override will be cleared on the NVIDIA profile, but the rule "
-          "will stay in your Managed list so you can re-enable it without "
-          "picking the executable again.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Restore Default'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    await _runRemove(managed, removeFromLocalDb: false);
-  }
-
-  Future<void> _runRemove(ManagedRule managed,
-      {required bool removeFromLocalDb}) async {
     setState(() => _busy = true);
-    final service = ref.read(removeExclusionServiceProvider);
-
-    RemoveResult result;
-    try {
-      result = removeFromLocalDb
-          ? await service.removeExclusion(managed)
-          : await service.restoreDefault(managed);
-    } catch (e) {
-      result = RemoveResult.failure('Unexpected error: $e');
-    }
-
+    final service = ref.read(managedRuleActionsServiceProvider);
+    final result = await service.setExclusionEnabled(managed, enabled);
     if (!mounted) return;
     setState(() => _busy = false);
 
-    if (result.success) {
-      await ref.read(managedRulesProvider.notifier).refresh();
-      if (!mounted) return;
-      if (result.removedFromLocalDb) {
-        ref.read(selectedRuleProvider.notifier).state = null;
-      }
-      final msg = switch (result.action) {
-        'stale_db_cleanup' =>
-          'Driver state was already clean; removed stale row.',
-        'setting_restored' =>
-          'Restored NVIDIA default for ${managed.exeName}.',
-        _ => 'Exclusion removed for ${managed.exeName}.',
-      };
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg)));
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.errorMessage ?? 'Failed to remove.')),
+    if (!result.success) {
+      NotificationService.showError(
+        result.errorMessage ?? 'Failed to update rule.',
+        context: context,
       );
+      return;
     }
+
+    await ref.read(managedRulesProvider.notifier).refresh();
+    if (!mounted) return;
+    if (result.rowDeleted) {
+      ref.read(selectedRuleProvider.notifier).state = null;
+      NotificationService.showInfo(
+        'Driver state was already clean; removed stale row for '
+        '${managed.exeName}.',
+        context: context,
+      );
+      return;
+    }
+
+    NotificationService.showSuccess(
+      enabled
+          ? 'Exclusion enabled for ${managed.exeName}.'
+          : 'Exclusion cleared for ${managed.exeName}.',
+      context: context,
+    );
+    NotificationService.showRestartTargetHint(managed.exeName, context: context);
+  }
+
+  Future<void> _onMenuAction(_RuleMenuAction action) async {
+    final managed = _lookupManagedRule();
+    if (managed == null) return;
+
+    switch (action) {
+      case _RuleMenuAction.unmanage:
+        await _confirmUnmanage(managed);
+      case _RuleMenuAction.deleteProfile:
+        await _confirmDeleteProfile(managed);
+    }
+  }
+
+  Future<void> _confirmUnmanage(ManagedRule managed) async {
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Remove ${managed.exeName} from managed list?',
+      message: 'The rule will be removed from this app only. The NVIDIA '
+          'profile and any setting overrides stay exactly as they are on the '
+          "driver — nothing is changed on NVIDIA's side. You can re-adopt "
+          'this rule later from the Detected tab.',
+      confirmLabel: 'Remove from list',
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() => _busy = true);
+    final service = ref.read(managedRuleActionsServiceProvider);
+    final result = await service.unmanage(managed);
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    if (!result.success) {
+      NotificationService.showError(
+        result.errorMessage ?? 'Failed to remove from list.',
+        context: context,
+      );
+      return;
+    }
+
+    await ref.read(managedRulesProvider.notifier).refresh();
+    if (!mounted) return;
+    ref.read(selectedRuleProvider.notifier).state = null;
+    NotificationService.showSuccess(
+      '${managed.exeName} is no longer managed by this app.',
+      context: context,
+    );
+  }
+
+  Future<void> _confirmDeleteProfile(ManagedRule managed) async {
+    if (managed.profileWasPredefined) {
+      NotificationService.showWarning(
+        'Cannot delete NVIDIA-predefined profile "${managed.profileName}".',
+        context: context,
+      );
+      return;
+    }
+
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Delete NVIDIA profile "${managed.profileName}"?',
+      message: 'This removes the entire profile from NVIDIA\'s driver '
+          'database, including every application attached to it and every '
+          'setting override on it — not just the capture-exclusion. This '
+          'cannot be undone from within the app.',
+      confirmLabel: 'Delete profile',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() => _busy = true);
+    final service = ref.read(managedRuleActionsServiceProvider);
+    final result = await service.deleteNvidiaProfile(managed);
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    if (!result.success) {
+      NotificationService.showError(
+        result.errorMessage ?? 'Failed to delete profile.',
+        context: context,
+      );
+      return;
+    }
+
+    await ref.read(managedRulesProvider.notifier).refresh();
+    if (!mounted) return;
+    ref.read(selectedRuleProvider.notifier).state = null;
+    NotificationService.showSuccess(
+      'Deleted NVIDIA profile "${managed.profileName}".',
+      context: context,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isPredef = widget.rule.isPredefined;
     return Padding(
       padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _HeaderRow(rule: widget.rule),
+            const SizedBox(height: 16),
+            _FieldsBlock(rule: widget.rule),
+            const SizedBox(height: 20),
+            _ToggleRow(
+              enabled: _exclusionEnabled,
+              busy: _busy,
+              onChanged: _busy ? null : _onToggle,
+              onMenuAction: _busy ? null : _onMenuAction,
+              profileIsPredefined: isPredef,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _exclusionEnabled
+                  ? 'Exclusion is active — NVIDIA capture/Instant Replay '
+                      'skip this executable. Toggle off to clear the '
+                      'override without losing the rule.'
+                  : 'Exclusion is cleared — NVIDIA capture behaves as it '
+                      'normally would for this executable. Toggle on to '
+                      're-apply.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Restart the target application for changes to take full effect.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 20),
+            AdvancedEditor(rule: widget.rule, allowEdit: true),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToggleRow extends StatelessWidget {
+  final bool enabled;
+  final bool busy;
+  final ValueChanged<bool>? onChanged;
+  final ValueChanged<_RuleMenuAction>? onMenuAction;
+  final bool profileIsPredefined;
+
+  const _ToggleRow({
+    required this.enabled,
+    required this.busy,
+    required this.onChanged,
+    required this.onMenuAction,
+    required this.profileIsPredefined,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest
+            .withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Row(
         children: [
-          _HeaderRow(rule: widget.rule),
-          const SizedBox(height: 16),
-          _FieldsBlock(rule: widget.rule),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _confirmRemove,
-                icon: const Icon(Icons.block, size: 16),
-                label: const Text('Remove Exclusion'),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _confirmRestoreDefault,
-                icon: const Icon(Icons.restore, size: 16),
-                label: const Text('Restore Default'),
-              ),
-              if (_busy) ...[
-                const SizedBox(width: 16),
-                const SizedBox(
-                  height: 16,
-                  width: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+          Icon(
+            enabled ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+            size: 20,
+            color: enabled
+                ? theme.colorScheme.primary
+                : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Exclusion enabled',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  enabled ? 'Currently hidden from capture' : 'Currently visible to capture',
+                  style: theme.textTheme.bodySmall,
                 ),
               ],
-            ],
+            ),
           ),
-          const SizedBox(height: 12),
-          Text(
-            'Restart the target application for changes to take full effect.',
-            style: theme.textTheme.bodySmall,
+          if (busy) ...[
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+          ],
+          Switch(
+            value: enabled,
+            onChanged: onChanged,
+          ),
+          const SizedBox(width: 4),
+          PopupMenuButton<_RuleMenuAction>(
+            enabled: onMenuAction != null,
+            tooltip: 'More actions',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (v) => onMenuAction?.call(v),
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: _RuleMenuAction.unmanage,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.playlist_remove_outlined),
+                  title: Text('Remove from managed list'),
+                  subtitle: Text("Local only — driver unchanged"),
+                ),
+              ),
+              PopupMenuItem(
+                value: _RuleMenuAction.deleteProfile,
+                enabled: !profileIsPredefined,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    Icons.delete_forever_outlined,
+                    color: profileIsPredefined
+                        ? null
+                        : theme.colorScheme.error,
+                  ),
+                  title: Text(
+                    'Delete NVIDIA profile',
+                    style: TextStyle(
+                      color: profileIsPredefined
+                          ? null
+                          : theme.colorScheme.error,
+                    ),
+                  ),
+                  subtitle: Text(
+                    profileIsPredefined
+                        ? 'Disabled — NVIDIA-predefined'
+                        : 'Destructive — removes from NVIDIA',
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

@@ -3,8 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
 import '../models/managed_rule.dart';
+import '../models/reconciliation_result.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/multi_select_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/search_provider.dart';
+import 'batch_action_bar.dart';
 import 'rule_list_tile.dart';
 
 /// Managed tab content: lists rules created/managed by this app. Reads from
@@ -17,6 +21,9 @@ class ManagedRulesTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final rulesAsync = ref.watch(filteredManagedRulesProvider);
     final query = ref.watch(searchProvider);
+    final multiSelect = ref.watch(multiSelectModeProvider);
+    final selectedIds = ref.watch(selectedRuleIdsProvider);
+    final syncStatuses = ref.watch(managedRuleSyncStatusProvider);
 
     return rulesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -27,31 +34,91 @@ class ManagedRulesTab extends ConsumerWidget {
               ? const _EmptyState()
               : _NoMatchState(query: query);
         }
-        return ListView.builder(
+
+        final list = ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: 4),
           itemCount: rules.length,
           itemBuilder: (context, i) {
             final managed = rules[i];
             final exclusion = ExclusionRule.fromManagedRule(managed);
-            final status = _statusFor(managed);
+            final sync = syncStatuses[managed.exePath];
+            final status = _statusFor(managed, sync);
+            final ruleId = managed.id;
             return RuleListTile(
               rule: exclusion,
               sourceBadge: RuleSourceBadge.managed,
               statusColor: status.color,
               statusTooltip: status.tooltip,
+              multiSelectMode: multiSelect,
+              isChecked: ruleId != null && selectedIds.contains(ruleId),
+              onCheckedChanged: ruleId == null
+                  ? null
+                  : (checked) => _toggleSelected(ref, ruleId, checked),
+              onLongPress: multiSelect
+                  ? null
+                  : () => _enterMultiSelect(ref, ruleId),
             );
           },
+        );
+
+        if (!multiSelect) return list;
+        return Column(
+          children: [
+            const BatchActionBar(),
+            Expanded(child: list),
+          ],
         );
       },
     );
   }
 
-  _RuleStatus _statusFor(ManagedRule rule) {
-    // Plan 16 leaves driver-state verification to a later feature (NVAPI
-    // service wiring). Until then, if the recorded intended value matches
-    // the capture-disable value we show green; otherwise we show yellow to
-    // signal "managed but unverified". Drift (red) will be surfaced once
-    // the NVAPI side publishes live values in plan 26.
+  void _toggleSelected(WidgetRef ref, int id, bool checked) {
+    final current = ref.read(selectedRuleIdsProvider);
+    final next = Set<int>.from(current);
+    if (checked) {
+      next.add(id);
+    } else {
+      next.remove(id);
+    }
+    ref.read(selectedRuleIdsProvider.notifier).state = next;
+  }
+
+  void _enterMultiSelect(WidgetRef ref, int? initialId) {
+    ref.read(multiSelectModeProvider.notifier).state = true;
+    ref.read(selectedRuleIdsProvider.notifier).state =
+        initialId == null ? const {} : {initialId};
+  }
+
+  /// Build the dot color / tooltip for a managed rule. Reconciliation,
+  /// when it has produced a result, overrides the optimistic DB-only
+  /// colour — we prefer live ground truth over the recorded `intendedValue`.
+  _RuleStatus _statusFor(ManagedRule rule, ManagedRuleSyncStatus? sync) {
+    if (sync != null) {
+      switch (sync) {
+        case ManagedRuleSyncStatus.inSync:
+          return const _RuleStatus(
+            color: Color(0xFF66BB6A),
+            tooltip: 'In sync with NVIDIA driver',
+          );
+        case ManagedRuleSyncStatus.drifted:
+          return const _RuleStatus(
+            color: Color(0xFFFFB300),
+            tooltip: 'Driver value has drifted — review this rule',
+          );
+        case ManagedRuleSyncStatus.orphaned:
+          return const _RuleStatus(
+            color: Color(0xFFE57373),
+            tooltip: 'Profile or application missing from NVIDIA driver',
+          );
+        case ManagedRuleSyncStatus.needsReapply:
+          return const _RuleStatus(
+            color: Color(0xFFE57373),
+            tooltip: 'Driver was reset — re-apply this rule',
+          );
+      }
+    }
+
+    // No reconciliation yet — fall back to the recorded intended value.
     if (rule.intendedValue == AppConstants.captureDisableValue) {
       return const _RuleStatus(
         color: Color(0xFF66BB6A),

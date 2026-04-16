@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../constants/app_constants.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/scan_provider.dart';
 
 class AppToolbar extends ConsumerWidget {
@@ -22,6 +23,7 @@ class AppToolbar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isScanning = ref.watch(isScanningProvider);
+    final isReconciling = ref.watch(isReconcilingProvider);
     final lastScanAt = ref.watch(lastScanAtProvider);
 
     return Container(
@@ -63,6 +65,19 @@ class AppToolbar extends ConsumerWidget {
           ),
           const SizedBox(width: 12),
           const Spacer(),
+          if (isReconciling) ...[
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Reconciling…',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(width: 12),
+          ],
           OutlinedButton.icon(
             onPressed: isScanning ? null : onScanProfiles,
             icon: isScanning
