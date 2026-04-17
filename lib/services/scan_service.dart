@@ -97,6 +97,7 @@ class ScanService {
       driftedManagedRules: classification.drifted,
       orphanedManagedRules: classification.orphans,
       baseProfileRule: baseRule?.toExclusionRule(sourceType: 'inherited'),
+      managedExeLiveValues: classification.managedLiveValues,
       totalProfilesScanned: profilesScanned,
       totalSettingsFound: settingsFound,
       scanDuration: Duration(milliseconds: durationMs),
@@ -118,6 +119,7 @@ class ScanService {
     final defaults = <ExclusionRule>[];
     final drifted = <ExclusionRule>[];
     final seenManagedKeys = <String>{};
+    final managedLiveValues = <String, int?>{};
 
     for (final s in scanned) {
       if (s.appExePath.isEmpty) {
@@ -136,6 +138,7 @@ class ScanService {
       final match = managedByKey[key];
       if (match != null) {
         seenManagedKeys.add(key);
+        managedLiveValues[match.exePath] = s.currentValue;
         if (match.intendedValue != s.currentValue) {
           drifted.add(ExclusionRule(
             exePath: match.exePath,
@@ -167,6 +170,7 @@ class ScanService {
     for (final entry in managedByKey.entries) {
       if (seenManagedKeys.contains(entry.key)) continue;
       final rule = entry.value;
+      managedLiveValues[rule.exePath] = null;
       orphans.add(ExclusionRule(
         exePath: rule.exePath,
         exeName: rule.exeName,
@@ -185,6 +189,7 @@ class ScanService {
       defaults: defaults,
       drifted: drifted,
       orphans: orphans,
+      managedLiveValues: managedLiveValues,
     );
   }
 
@@ -200,11 +205,13 @@ class _ClassificationBuckets {
   final List<ExclusionRule> defaults;
   final List<ExclusionRule> drifted;
   final List<ExclusionRule> orphans;
+  final Map<String, int?> managedLiveValues;
 
   const _ClassificationBuckets({
     required this.detected,
     required this.defaults,
     required this.drifted,
     required this.orphans,
+    required this.managedLiveValues,
   });
 }

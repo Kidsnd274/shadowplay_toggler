@@ -5,39 +5,44 @@ import '../models/exclusion_rule.dart';
 import '../providers/adopt_rule_provider.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/selected_rule_provider.dart';
 import '../services/notification_service.dart';
 import 'confirmation_dialog.dart';
 
-/// Shared adopt-single-rule flow used by [AdoptRuleButton] and by inline
-/// "Adopt" actions in the Detected tab list. Shows a confirmation dialog,
-/// invokes [AdoptRuleService], posts notifications, and on success moves
-/// the rule from the Detected list into the Managed list (re-selecting it
-/// in its new managed form so the detail pane updates).
+/// Shared "watch this profile" flow used by [AdoptRuleButton] and by
+/// inline "Adopt" actions in the Detected tab list. Adoption is purely
+/// local — the NVIDIA driver value is not touched. The row simply moves
+/// from the Detected list into the Managed list.
 ///
-/// Returns true if the rule was adopted (or was already managed). Returns
-/// false if the user cancelled or adoption failed.
+/// Returns true if the profile is now in the Managed list (either we
+/// added it now or it was already there). Returns false if the user
+/// cancelled or adoption failed.
 Future<bool> adoptRuleInteractive(
   BuildContext context,
   WidgetRef ref,
-  ExclusionRule rule,
-) async {
-  final confirmed = await ConfirmationDialog.show(
-    context,
-    title: 'Adopt exclusion rule for ${rule.exeName}?',
-    message:
-        'This rule was created externally. Adopting it lets you manage it '
-        'from this app — the NVIDIA driver value is not changed.',
-    confirmLabel: 'Adopt',
-  );
-  if (!confirmed) return false;
+  ExclusionRule rule, {
+  bool skipConfirmation = false,
+}) async {
+  if (!skipConfirmation) {
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Watch profile for ${rule.exeName}?',
+      message:
+          'Add this profile to your Managed list. The NVIDIA driver is '
+          'not touched — the exclusion stays exactly as it is. You can '
+          'unadopt at any time without affecting the driver.',
+      confirmLabel: 'Adopt',
+    );
+    if (!confirmed) return false;
+  }
 
   final service = ref.read(adoptRuleServiceProvider);
   final result = await service.adoptRule(rule);
 
   if (!result.success) {
     NotificationService.showError(
-      result.errorMessage ?? 'Failed to adopt rule.',
+      result.errorMessage ?? 'Failed to adopt profile.',
     );
     return false;
   }
@@ -47,14 +52,63 @@ Future<bool> adoptRuleInteractive(
     );
   } else {
     NotificationService.showSuccess('Adopted ${rule.exeName}.');
-    if (result.valueChangedSinceScan) {
-      NotificationService.showWarning(
-        'Setting value had changed since the last scan — adopted the live '
-        'value instead.',
-      );
-    }
   }
 
+  await _afterAdoptHousekeeping(ref, rule);
+  return true;
+}
+
+/// "Adopt + Add Exclusion" flow. Watches the profile *and* applies the
+/// capture-exclusion in a single step. Used by the inline "Add
+/// Exclusion" button in the Detected tab.
+Future<bool> addExclusionInteractive(
+  BuildContext context,
+  WidgetRef ref,
+  ExclusionRule rule,
+) async {
+  final confirmed = await ConfirmationDialog.show(
+    context,
+    title: 'Add exclusion for ${rule.exeName}?',
+    message:
+        'Adopt this profile into the Managed list and turn the '
+        'capture-exclusion on. NVIDIA capture / Instant Replay will skip '
+        'this executable. You can toggle it off later without losing the '
+        'profile from your Managed list.',
+    confirmLabel: 'Add Exclusion',
+  );
+  if (!confirmed) return false;
+
+  final service = ref.read(adoptRuleServiceProvider);
+  final result = await service.adoptAndAddExclusion(rule);
+
+  if (!result.success) {
+    NotificationService.showError(
+      result.errorMessage ?? 'Failed to add exclusion.',
+    );
+    return false;
+  }
+
+  if (result.alreadyManaged) {
+    NotificationService.showInfo(
+      '${rule.exeName} is already in your Managed list.',
+    );
+  } else {
+    NotificationService.showSuccess('Added exclusion for ${rule.exeName}.');
+    NotificationService.showRestartTargetHint(rule.exeName);
+  }
+
+  await _afterAdoptHousekeeping(ref, rule, exclusionEnabled: true);
+  return true;
+}
+
+/// Shared housekeeping after a successful adopt/add-exclusion: refresh
+/// providers, update the live state map, and remove the rule from the
+/// Detected list.
+Future<void> _afterAdoptHousekeeping(
+  WidgetRef ref,
+  ExclusionRule rule, {
+  bool? exclusionEnabled,
+}) async {
   final detected = ref.read(detectedRulesProvider);
   final remaining = detected.rules
       .where((r) => r.exePath != rule.exePath)
@@ -63,14 +117,24 @@ Future<bool> adoptRuleInteractive(
 
   await ref.read(managedRulesProvider.notifier).refresh();
 
+  // Update the single source of truth for exclusion state. If we just
+  // applied the exclusion, we already know the value; otherwise do a
+  // best-effort live query so the dot reflects reality immediately.
+  final stateNotifier = ref.read(profileExclusionStateProvider.notifier);
+  if (exclusionEnabled != null) {
+    stateNotifier.setForExe(rule.exePath, exclusionEnabled);
+  } else {
+    await stateNotifier.refreshExe(rule.exePath);
+  }
+
   // Re-select the rule in its new "managed" form so the detail pane
   // updates to show the editable controls.
-  ref.read(selectedRuleProvider.notifier).state = rule.copyWith(
-    sourceType: 'managed',
-    isManaged: true,
-  );
-
-  return true;
+  if (ref.read(selectedRuleProvider) == rule) {
+    ref.read(selectedRuleProvider.notifier).state = rule.copyWith(
+      sourceType: 'managed',
+      isManaged: true,
+    );
+  }
 }
 
 /// "Adopt this rule" button shown in the detail view for detected/external
@@ -99,33 +163,165 @@ class _AdoptRuleButtonState extends ConsumerState<AdoptRuleButton> {
 
   @override
   Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _busy ? null : _onAdopt,
+      icon: _busy
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.bookmark_add_outlined, size: 16),
+      label: const Text('Adopt'),
+    );
+  }
+}
+
+/// Compact action chip used inline on each row of the Detected tab.
+/// Two flavours via [filled]:
+///   * `false` (Adopt) — neutral outlined chip, watch-only.
+///   * `true`  (Add Exclusion) — primary-filled chip, adopts AND turns
+///     the exclusion on in one step.
+class _DetectedRowChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final bool busy;
+  final bool filled;
+  final VoidCallback? onPressed;
+
+  const _DetectedRowChip({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.busy,
+    required this.filled,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            FilledButton.icon(
-              onPressed: _busy ? null : _onAdopt,
-              icon: const Icon(Icons.bookmark_add_outlined, size: 16),
-              label: const Text('Adopt this rule'),
+    final primary = theme.colorScheme.primary;
+    final bg = filled ? primary.withValues(alpha: 0.18) : Colors.transparent;
+    final fg = filled
+        ? primary
+        : theme.colorScheme.onSurface.withValues(alpha: 0.85);
+    final side = filled
+        ? BorderSide.none
+        : BorderSide(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.7),
+          );
+
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: bg,
+        shape: StadiumBorder(side: side),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: busy ? null : onPressed,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                busy
+                    ? SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.6,
+                          valueColor: AlwaysStoppedAnimation<Color>(fg),
+                        ),
+                      )
+                    : Icon(icon, size: 14, color: fg),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
             ),
-            if (_busy) ...[
-              const SizedBox(width: 12),
-              const SizedBox(
-                height: 14,
-                width: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ],
-          ],
+          ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Take control of this rule. It will appear in your Managed list.',
-          style: theme.textTheme.bodySmall,
-        ),
-      ],
+      ),
+    );
+  }
+}
+
+/// "Adopt" chip — local watch only, no driver mutation.
+class AdoptInlineButton extends ConsumerStatefulWidget {
+  final ExclusionRule rule;
+  const AdoptInlineButton({super.key, required this.rule});
+
+  @override
+  ConsumerState<AdoptInlineButton> createState() => _AdoptInlineButtonState();
+}
+
+class _AdoptInlineButtonState extends ConsumerState<AdoptInlineButton> {
+  bool _busy = false;
+
+  Future<void> _onAdopt() async {
+    setState(() => _busy = true);
+    try {
+      await adoptRuleInteractive(context, ref, widget.rule);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _DetectedRowChip(
+      icon: Icons.bookmark_add_outlined,
+      label: 'Adopt',
+      tooltip: 'Watch this profile (driver unchanged)',
+      busy: _busy,
+      filled: false,
+      onPressed: _onAdopt,
+    );
+  }
+}
+
+/// "Add Exclusion" chip — adopt + apply the capture-exclusion in one
+/// step. Use when the user is sure they want this exe excluded right
+/// now.
+class AddExclusionInlineButton extends ConsumerStatefulWidget {
+  final ExclusionRule rule;
+  const AddExclusionInlineButton({super.key, required this.rule});
+
+  @override
+  ConsumerState<AddExclusionInlineButton> createState() =>
+      _AddExclusionInlineButtonState();
+}
+
+class _AddExclusionInlineButtonState
+    extends ConsumerState<AddExclusionInlineButton> {
+  bool _busy = false;
+
+  Future<void> _onAdd() async {
+    setState(() => _busy = true);
+    try {
+      await addExclusionInteractive(context, ref, widget.rule);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _DetectedRowChip(
+      icon: Icons.visibility_off_outlined,
+      label: 'Exclude',
+      tooltip: 'Adopt this profile and turn the exclusion on',
+      busy: _busy,
+      filled: true,
+      onPressed: _onAdd,
     );
   }
 }
@@ -149,9 +345,9 @@ class _AdoptAllButtonState extends ConsumerState<AdoptAllButton> {
 
     final confirmed = await ConfirmationDialog.show(
       context,
-      title: 'Adopt all detected rules?',
+      title: 'Adopt all detected profiles?',
       message:
-          'Move all ${rules.length} detected exclusion rules into your '
+          'Move all ${rules.length} detected exclusion profiles into your '
           'Managed list. NVIDIA driver values are not changed.',
       confirmLabel: 'Adopt All',
     );
@@ -170,8 +366,8 @@ class _AdoptAllButtonState extends ConsumerState<AdoptAllButton> {
       if (result.failed == 0) {
         NotificationService.showSuccess(
           result.adopted == 0
-              ? 'All ${result.total} rules were already managed.'
-              : 'Adopted ${result.adopted} rule'
+              ? 'All ${result.total} profiles were already managed.'
+              : 'Adopted ${result.adopted} profile'
                   '${result.adopted == 1 ? '' : 's'}.',
         );
       } else {

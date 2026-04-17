@@ -45,6 +45,12 @@ class ReconciliationResult {
   /// `managedRulesProvider` to render status dots.
   final Map<String, ManagedRuleSyncStatus> statuses;
 
+  /// Live driver values for every managed exe, keyed by `exePath`. A
+  /// `null` value means the exe is no longer attached to any DRS
+  /// profile (orphaned). Used to hydrate
+  /// `profileExclusionStateProvider` in one shot at startup.
+  final Map<String, int?> managedExeLiveValues;
+
   /// External rules (not in local DB) surfaced by the driver scan. Shown
   /// in the Detected tab once the scan pipeline publishes them — the
   /// reconciliation service does not push these into providers directly.
@@ -70,6 +76,7 @@ class ReconciliationResult {
     this.rulesOrphaned = 0,
     this.rulesNeedingReapply = 0,
     this.statuses = const {},
+    this.managedExeLiveValues = const {},
     this.detectedExternalRules = const [],
     this.warnings = const [],
     this.duration = Duration.zero,
@@ -86,4 +93,39 @@ class ReconciliationResult {
       rulesDrifted > 0 ||
       rulesOrphaned > 0 ||
       rulesNeedingReapply > 0;
+
+  ReconciliationResult copyWith({
+    bool? drsResetDetected,
+    String? previousDriverVersion,
+    String? currentDriverVersion,
+    int? rulesInSync,
+    int? rulesDrifted,
+    int? rulesOrphaned,
+    int? rulesNeedingReapply,
+    Map<String, ManagedRuleSyncStatus>? statuses,
+    Map<String, int?>? managedExeLiveValues,
+    List<ExclusionRule>? detectedExternalRules,
+    List<String>? warnings,
+    Duration? duration,
+    String? fatalError,
+  }) {
+    return ReconciliationResult(
+      drsResetDetected: drsResetDetected ?? this.drsResetDetected,
+      previousDriverVersion:
+          previousDriverVersion ?? this.previousDriverVersion,
+      currentDriverVersion: currentDriverVersion ?? this.currentDriverVersion,
+      rulesInSync: rulesInSync ?? this.rulesInSync,
+      rulesDrifted: rulesDrifted ?? this.rulesDrifted,
+      rulesOrphaned: rulesOrphaned ?? this.rulesOrphaned,
+      rulesNeedingReapply: rulesNeedingReapply ?? this.rulesNeedingReapply,
+      statuses: statuses ?? this.statuses,
+      managedExeLiveValues:
+          managedExeLiveValues ?? this.managedExeLiveValues,
+      detectedExternalRules:
+          detectedExternalRules ?? this.detectedExternalRules,
+      warnings: warnings ?? this.warnings,
+      duration: duration ?? this.duration,
+      fatalError: fatalError ?? this.fatalError,
+    );
+  }
 }

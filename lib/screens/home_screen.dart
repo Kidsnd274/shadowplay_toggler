@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../constants/app_constants.dart';
 import '../models/nvapi_state.dart';
 import '../providers/database_provider.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/nvapi_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/reconciliation_provider.dart';
 import '../providers/scan_provider.dart';
 import '../services/notification_service.dart';
@@ -68,6 +70,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         );
         return;
       }
+
+      // Hydrate the live-state map from the reconciliation scan so the
+      // status dot, toggle, and badge all reflect what's actually on
+      // the driver right now — not whatever the local DB last
+      // recorded.
+      ref
+          .read(profileExclusionStateProvider.notifier)
+          .setAll({
+        for (final entry in result.managedExeLiveValues.entries)
+          entry.key: entry.value == null
+              ? null
+              : entry.value == AppConstants.captureDisableValue,
+      });
 
       // Surface the scan's detected rules into the Detected tab so the
       // user has a one-click path to adopt them (useful right after a

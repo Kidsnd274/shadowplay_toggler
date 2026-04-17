@@ -6,6 +6,7 @@ import '../models/managed_rule.dart';
 import '../providers/batch_provider.dart';
 import '../providers/managed_rules_provider.dart';
 import '../providers/multi_select_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../services/notification_service.dart';
 import 'confirmation_dialog.dart';
 
@@ -29,18 +30,20 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
     final all = ref.read(managedRulesProvider).valueOrNull ?? const [];
     final selected = all.where((r) => r.id != null && ids.contains(r.id)).toList();
     if (selected.isEmpty) {
-      NotificationService.showInfo('No rules selected.');
+      NotificationService.showInfo('No profiles selected.');
       return;
     }
 
     final verb = enable ? 'Enable' : 'Disable';
     final confirmed = await ConfirmationDialog.show(
       context,
-      title: '$verb ${selected.length} rule${selected.length == 1 ? '' : 's'}?',
+      title:
+          '$verb ${selected.length} profile${selected.length == 1 ? '' : 's'}?',
       message: enable
           ? 'Apply the capture-exclusion setting to the selected profiles.'
           : 'Clear the capture-exclusion setting on the selected profiles. '
-              'Their managed rows stay so you can re-enable later.',
+              'The profiles stay in your Managed list so you can re-enable '
+              'later.',
       confirmLabel: verb,
     );
     if (!confirmed) return;
@@ -53,6 +56,16 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
           : await service.batchDisable(selected);
       if (!mounted) return;
       _reportResult(result, verb: verb);
+      // Optimistically update the live-state map for everything that
+      // succeeded. The batch result identifies failures by exePath in
+      // [BatchResult.errors], but the simpler "everything we just
+      // touched" approximation is good enough — any hidden failure
+      // will resolve itself on the next Scan Profiles.
+      final stateNotifier =
+          ref.read(profileExclusionStateProvider.notifier);
+      for (final rule in selected) {
+        stateNotifier.setForExe(rule.exePath, enable);
+      }
       await ref.read(managedRulesProvider.notifier).refresh();
       exitMultiSelect(ref);
     } finally {
@@ -63,7 +76,7 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
   void _reportResult(BatchResult result, {required String verb}) {
     if (!result.hasFailures) {
       NotificationService.showSuccess(
-        '${verb}d ${result.succeeded} of ${result.total} rules.',
+        '${verb}d ${result.succeeded} of ${result.total} profiles.',
       );
     } else {
       NotificationService.showError(

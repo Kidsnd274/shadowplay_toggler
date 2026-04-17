@@ -7,6 +7,7 @@ import '../providers/database_provider.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rules_provider.dart';
 import '../providers/nvidia_defaults_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/scan_provider.dart';
 
 /// App-state key for persisting the last-scan timestamp across sessions.
@@ -35,6 +36,12 @@ Future<void> runScan(BuildContext context, WidgetRef ref) async {
     ref.read(detectedRulesProvider.notifier).setRules(result.detectedRules);
     ref.read(nvidiaDefaultsProvider.notifier).setRules(result.nvidiaDefaults);
     ref.read(lastScanResultProvider.notifier).state = result;
+
+    // The scan walked every DRS profile we care about — push the live
+    // exclusion state for each watched exe into the global state map so
+    // the status dot, toggle and badge all reflect the freshly-observed
+    // truth.
+    ref.read(profileExclusionStateProvider.notifier).hydrateFromScan(result);
 
     // Refresh managed rules so drift/orphan badges re-render against the
     // freshly populated providers.

@@ -19,16 +19,9 @@ final reconciliationServiceProvider = Provider<ReconciliationService>((ref) {
 final isReconcilingProvider = StateProvider<bool>((ref) => false);
 
 /// The most recent reconciliation outcome. Null until the first startup
-/// pass completes. The managed list renders `syncStatus` by joining its
-/// rows against [ReconciliationResult.statuses].
+/// pass completes. Drives the passive "driver change detected" banner.
+/// Per-profile state is published separately into
+/// [profileExclusionStateProvider] so widgets can read live exclusion
+/// state without depending on the reconciliation result staying around.
 final lastReconciliationProvider =
     StateProvider<ReconciliationResult?>((ref) => null);
-
-/// Per-managed-rule sync status map, derived from the most recent
-/// reconciliation. Empty before the first pass or after a fatal error.
-final managedRuleSyncStatusProvider =
-    Provider<Map<String, ManagedRuleSyncStatus>>((ref) {
-  final latest = ref.watch(lastReconciliationProvider);
-  if (latest == null || latest.hasFatalError) return const {};
-  return latest.statuses;
-});

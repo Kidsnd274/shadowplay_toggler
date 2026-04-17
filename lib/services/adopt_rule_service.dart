@@ -19,6 +19,13 @@ class AdoptRuleService {
 
   AdoptRuleService(this._nvapi, this._repo);
 
+  /// Watch a previously-external profile from this app. Adoption is
+  /// purely local — the NVIDIA driver is never mutated. The exclusion
+  /// stays in whatever state it was in (set or cleared); the only
+  /// observable change is that the row now appears in the Managed tab.
+  ///
+  /// To "adopt + apply the exclusion in one step", call
+  /// [adoptAndAddExclusion] instead.
   Future<AdoptResult> adoptRule(ExclusionRule detected) async {
     if (detected.exePath.isEmpty) {
       return AdoptResult.failure(
@@ -33,6 +40,10 @@ class AdoptRuleService {
       return AdoptResult.alreadyManaged();
     }
 
+    // Best-effort: re-resolve the profile so we record the live name
+    // (in case the user renamed it externally). We do *not* read the
+    // setting value here — `intendedValue` is no longer used by the UI
+    // for live state; it's just a starting hint.
     Map<String, dynamic>? findResponse;
     try {
       findResponse = _nvapi.findApplication(detected.exePath);
@@ -40,39 +51,13 @@ class AdoptRuleService {
       return AdoptResult.failure('NVAPI error: ${e.message}');
     }
 
-    final found = (findResponse?['found'] as bool?) ?? false;
-    if (!found) {
-      return AdoptResult.failure(
-        'Executable is no longer attached to any NVIDIA profile. Re-scan '
-        'to refresh the Detected tab.',
-      );
-    }
-
     final liveProfileName =
-        (findResponse?['profileName'] as String?) ?? detected.profileName;
+        (findResponse?['profileName'] as String?)?.trim().isNotEmpty == true
+            ? findResponse!['profileName'] as String
+            : detected.profileName;
     final liveProfileIsPredefined =
-        (findResponse?['profileIsPredefined'] as bool?) ?? false;
-
-    final profileIndex = await _resolveProfileIndex(liveProfileName);
-    if (profileIndex == null) {
-      return AdoptResult.failure(
-        'Could not locate profile "$liveProfileName" in the DRS database.',
-      );
-    }
-
-    int liveValue = detected.currentValue;
-    try {
-      final setting =
-          _nvapi.getSetting(profileIndex, AppConstants.captureSettingId);
-      if (setting != null) {
-        liveValue = _parseSettingValue(setting['currentValue']) ?? liveValue;
-      }
-    } on NvapiException {
-      // Fall back to the scan-time value. The adopt still succeeds; the
-      // user will see a stale snapshot until the next scan.
-    }
-
-    final valueDrifted = liveValue != detected.currentValue;
+        (findResponse?['profileIsPredefined'] as bool?) ??
+            detected.isPredefined;
 
     final now = DateTime.now();
     final rule = ManagedRule(
@@ -81,8 +66,8 @@ class AdoptRuleService {
       profileName: liveProfileName,
       profileWasPredefined: liveProfileIsPredefined,
       profileWasCreated: false,
-      intendedValue: liveValue,
-      previousValue: liveValue,
+      intendedValue: detected.currentValue,
+      previousValue: detected.currentValue,
       createdAt: now,
       updatedAt: now,
     );
@@ -95,8 +80,46 @@ class AdoptRuleService {
 
     return AdoptResult(
       success: true,
-      valueChangedSinceScan: valueDrifted,
-      adoptedValue: liveValue,
+      adoptedValue: detected.currentValue,
+    );
+  }
+
+  /// Two-in-one: adopt the profile *and* set the capture-exclusion on
+  /// the driver. Used by the "Add Exclusion" action in the Detected tab
+  /// (and from the Add-Program flow when the executable was already on
+  /// a profile but the exclusion wasn't set yet).
+  Future<AdoptResult> adoptAndAddExclusion(ExclusionRule detected) async {
+    final adopt = await adoptRule(detected);
+    if (!adopt.success || adopt.alreadyManaged) return adopt;
+
+    Map<String, dynamic>? response;
+    try {
+      response = _nvapi.applyExclusion(detected.exePath);
+    } on NvapiException catch (e) {
+      return AdoptResult.failure(
+        'Adopted, but failed to set exclusion: ${e.message}',
+      );
+    }
+
+    final ok = (response?['success'] as bool?) ?? false;
+    if (!ok) {
+      final err = (response?['error'] as String?) ?? 'unknown NVAPI failure';
+      return AdoptResult.failure(
+        'Adopted, but failed to set exclusion: $err',
+      );
+    }
+
+    final existing = await _repo.getRuleByExePath(detected.exePath);
+    if (existing != null) {
+      await _repo.insertRule(existing.copyWith(
+        intendedValue: AppConstants.captureDisableValue,
+        updatedAt: DateTime.now(),
+      ));
+    }
+
+    return AdoptResult(
+      success: true,
+      adoptedValue: AppConstants.captureDisableValue,
     );
   }
 
@@ -128,26 +151,4 @@ class AdoptRuleService {
     );
   }
 
-  Future<int?> _resolveProfileIndex(String profileName) async {
-    try {
-      final profiles = _nvapi.getAllProfiles();
-      for (final p in profiles) {
-        if (p.name == profileName) return p.index;
-      }
-    } on NvapiException {
-      return null;
-    }
-    return null;
-  }
-
-  int? _parseSettingValue(dynamic raw) {
-    if (raw is int) return raw;
-    if (raw is String) {
-      final cleaned = raw.startsWith('0x') || raw.startsWith('0X')
-          ? raw.substring(2)
-          : raw;
-      return int.tryParse(cleaned, radix: 16);
-    }
-    return null;
-  }
 }

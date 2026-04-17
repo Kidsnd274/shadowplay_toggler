@@ -27,6 +27,13 @@ class RuleListTile extends ConsumerWidget {
   /// is rendered as an inline clickable link (underlined, accent color) and
   /// tapping it fires this callback instead of selecting the rule.
   final VoidCallback? onTrailingHintPressed;
+
+  /// Optional custom widget shown on the right-hand side of the tile,
+  /// after the source badge. Useful for inline action buttons (e.g. an
+  /// "Adopt" button on detected rows). When present, the widget is
+  /// responsible for its own tap handling — the list tile's `onTap` still
+  /// fires for taps outside the widget.
+  final Widget? trailingWidget;
   final bool dimmed;
   final VoidCallback? onSecondaryTap;
   final VoidCallback? onLongPress;
@@ -42,6 +49,7 @@ class RuleListTile extends ConsumerWidget {
     this.statusTooltip,
     this.trailingHint,
     this.onTrailingHintPressed,
+    this.trailingWidget,
     this.dimmed = false,
     this.onSecondaryTap,
     this.onLongPress,
@@ -144,6 +152,10 @@ class RuleListTile extends ConsumerWidget {
               ),
               const SizedBox(width: 8),
               _SourceBadge(source: sourceBadge),
+              if (trailingWidget != null) ...[
+                const SizedBox(width: 8),
+                trailingWidget!,
+              ],
             ],
           ),
         ),

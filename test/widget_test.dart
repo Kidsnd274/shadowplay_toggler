@@ -40,7 +40,7 @@ void main() {
     expect(find.text('Detected'), findsOneWidget);
     expect(find.text('Defaults'), findsOneWidget);
 
-    expect(find.text('No managed rules yet'), findsOneWidget);
+    expect(find.text('No managed profiles yet'), findsOneWidget);
   });
 
   testWidgets('Managed tab shows rules from provider', (tester) async {

@@ -509,7 +509,7 @@ class _RulesExportImportSection extends ConsumerWidget {
     final count = rulesAsync.valueOrNull?.length ?? 0;
 
     return _SectionCard(
-      title: 'Export / import managed rules',
+      title: 'Export / import managed profiles',
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -523,8 +523,8 @@ class _RulesExportImportSection extends ConsumerWidget {
           const SizedBox(height: 6),
           Text(
             count == 0
-                ? 'No managed rules to export yet.'
-                : '$count managed rule${count == 1 ? '' : 's'} currently in the list.',
+                ? 'No managed profiles to export yet.'
+                : '$count managed profile${count == 1 ? '' : 's'} currently in the list.',
             style: theme.textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
@@ -563,7 +563,7 @@ class _RulesExportImportSection extends ConsumerWidget {
   Future<void> _runExport(BuildContext context, WidgetRef ref) async {
     final suggested = 'shadowplay_rules_${_isoTimestamp()}.json';
     final picked = await FilePicker.saveFile(
-      dialogTitle: 'Export managed rules',
+      dialogTitle: 'Export managed profiles',
       fileName: suggested,
       lockParentWindow: true,
     );

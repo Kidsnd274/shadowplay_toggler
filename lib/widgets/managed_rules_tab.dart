@@ -1,18 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
-import '../models/managed_rule.dart';
-import '../models/reconciliation_result.dart';
 import '../providers/managed_rules_provider.dart';
 import '../providers/multi_select_provider.dart';
-import '../providers/reconciliation_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/search_provider.dart';
 import 'batch_action_bar.dart';
 import 'rule_list_tile.dart';
 
-/// Managed tab content: lists rules created/managed by this app. Reads from
-/// [filteredManagedRulesProvider] so the search bar in the left pane
+/// Managed tab content: lists NVIDIA profiles this app is watching. Reads
+/// from [filteredManagedRulesProvider] so the search bar in the left pane
 /// transparently filters the list.
 class ManagedRulesTab extends ConsumerWidget {
   const ManagedRulesTab({super.key});
@@ -23,7 +20,7 @@ class ManagedRulesTab extends ConsumerWidget {
     final query = ref.watch(searchProvider);
     final multiSelect = ref.watch(multiSelectModeProvider);
     final selectedIds = ref.watch(selectedRuleIdsProvider);
-    final syncStatuses = ref.watch(managedRuleSyncStatusProvider);
+    final exclusionStates = ref.watch(profileExclusionStateProvider);
 
     return rulesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -41,8 +38,7 @@ class ManagedRulesTab extends ConsumerWidget {
           itemBuilder: (context, i) {
             final managed = rules[i];
             final exclusion = ExclusionRule.fromManagedRule(managed);
-            final sync = syncStatuses[managed.exePath];
-            final status = _statusFor(managed, sync);
+            final status = _statusFor(exclusionStates[managed.exePath]);
             final ruleId = managed.id;
             return RuleListTile(
               rule: exclusion,
@@ -89,45 +85,29 @@ class ManagedRulesTab extends ConsumerWidget {
         initialId == null ? const {} : {initialId};
   }
 
-  /// Build the dot color / tooltip for a managed rule. Reconciliation,
-  /// when it has produced a result, overrides the optimistic DB-only
-  /// colour — we prefer live ground truth over the recorded `intendedValue`.
-  _RuleStatus _statusFor(ManagedRule rule, ManagedRuleSyncStatus? sync) {
-    if (sync != null) {
-      switch (sync) {
-        case ManagedRuleSyncStatus.inSync:
-          return const _RuleStatus(
-            color: Color(0xFF66BB6A),
-            tooltip: 'In sync with NVIDIA driver',
-          );
-        case ManagedRuleSyncStatus.drifted:
-          return const _RuleStatus(
-            color: Color(0xFFFFB300),
-            tooltip: 'Driver value has drifted — review this rule',
-          );
-        case ManagedRuleSyncStatus.orphaned:
-          return const _RuleStatus(
-            color: Color(0xFFE57373),
-            tooltip: 'Profile or application missing from NVIDIA driver',
-          );
-        case ManagedRuleSyncStatus.needsReapply:
-          return const _RuleStatus(
-            color: Color(0xFFE57373),
-            tooltip: 'Driver was reset — re-apply this rule',
-          );
-      }
-    }
-
-    // No reconciliation yet — fall back to the recorded intended value.
-    if (rule.intendedValue == AppConstants.captureDisableValue) {
+  /// Map the live exclusion state into a status dot. We only have two
+  /// signal colours: green when the exclusion is set on the driver,
+  /// grey otherwise. `null` (haven't queried yet, or profile missing
+  /// from the driver) is treated as "not excluded" for colouring
+  /// purposes — the tooltip explains the nuance for users who hover.
+  _RuleStatus _statusFor(bool? excluded) {
+    const greenExcluded = Color(0xFF66BB6A);
+    const neutralCleared = Color(0xFF90A4AE);
+    if (excluded == true) {
       return const _RuleStatus(
-        color: Color(0xFF66BB6A),
-        tooltip: 'Exclusion active (recorded)',
+        color: greenExcluded,
+        tooltip: 'Exclusion active on the driver',
+      );
+    }
+    if (excluded == false) {
+      return const _RuleStatus(
+        color: neutralCleared,
+        tooltip: 'Watched — exclusion is cleared',
       );
     }
     return const _RuleStatus(
-      color: Color(0xFFFFB300),
-      tooltip: 'Managed — not yet verified against driver',
+      color: neutralCleared,
+      tooltip: 'Live state not verified yet — run Scan Profiles to refresh',
     );
   }
 }
@@ -157,7 +137,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'No managed rules yet',
+              'No managed profiles yet',
               style: theme.textTheme.titleSmall,
               textAlign: TextAlign.center,
             ),
@@ -185,7 +165,7 @@ class _NoMatchState extends StatelessWidget {
       padding: const EdgeInsets.all(24),
       child: Center(
         child: Text(
-          "No rules matching '$query'",
+          "No profiles matching '$query'",
           style: theme.textTheme.bodySmall,
           textAlign: TextAlign.center,
         ),
@@ -214,7 +194,7 @@ class _ErrorState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Failed to load rules',
+              'Failed to load profiles',
               style: theme.textTheme.titleSmall,
             ),
             const SizedBox(height: 4),

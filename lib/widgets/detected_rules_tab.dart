@@ -42,10 +42,15 @@ class DetectedRulesTab extends ConsumerWidget {
                 rule: rule,
                 sourceBadge: RuleSourceBadge.external,
                 statusColor: const Color(0xFFFFB74D),
-                statusTooltip: 'External rule — source unknown',
-                trailingHint: 'Adopt',
-                onTrailingHintPressed: () =>
-                    adoptRuleInteractive(context, ref, rule),
+                statusTooltip: 'External profile — source unknown',
+                trailingWidget: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AdoptInlineButton(rule: rule),
+                    const SizedBox(width: 6),
+                    AddExclusionInlineButton(rule: rule),
+                  ],
+                ),
               );
             },
           ),

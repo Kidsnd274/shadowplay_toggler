@@ -84,6 +84,13 @@ class ScanResult {
   /// by the UI; not attached to any specific exe.
   final ExclusionRule? baseProfileRule;
 
+  /// The live driver value for every exe in the local "managed" list,
+  /// keyed by `exePath`. Value is the raw DRS DWORD; `null` means the
+  /// exe was not found in any profile (orphaned). Drives
+  /// [profileExclusionStateProvider] and the green/grey status dot on
+  /// the Managed tab.
+  final Map<String, int?> managedExeLiveValues;
+
   final int totalProfilesScanned;
   final int totalSettingsFound;
   final Duration scanDuration;
@@ -95,6 +102,7 @@ class ScanResult {
     this.driftedManagedRules = const [],
     this.orphanedManagedRules = const [],
     this.baseProfileRule,
+    this.managedExeLiveValues = const {},
     this.totalProfilesScanned = 0,
     this.totalSettingsFound = 0,
     this.scanDuration = Duration.zero,

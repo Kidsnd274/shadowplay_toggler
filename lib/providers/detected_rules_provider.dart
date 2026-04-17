@@ -37,6 +37,18 @@ class DetectedRulesNotifier extends StateNotifier<DetectedRulesState> {
   void clear() {
     state = const DetectedRulesState();
   }
+
+  /// Insert (or update) a single rule in the detected list, marking the
+  /// tab as scanned so the list renders rather than the pre-scan prompt.
+  /// Used e.g. after "Unadopt" puts a previously-managed rule back into
+  /// the detected bucket without requiring a full rescan.
+  void addOrUpdateRule(ExclusionRule rule) {
+    final next = state.rules
+        .where((r) => r.exePath != rule.exePath)
+        .toList(growable: true)
+      ..add(rule);
+    state = state.copyWith(rules: next, hasScanned: true);
+  }
 }
 
 final detectedRulesProvider =

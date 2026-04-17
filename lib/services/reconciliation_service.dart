@@ -76,6 +76,7 @@ class ReconciliationService {
         currentDriverVersion: null,
         rulesNeedingReapply: managed.length,
         statuses: statuses,
+        managedExeLiveValues: scan.managedExeLiveValues,
         detectedExternalRules: scan.detectedRules,
         duration: DateTime.now().difference(started),
       );
@@ -119,6 +120,7 @@ class ReconciliationService {
       rulesDrifted: driftedCount,
       rulesOrphaned: orphanedCount,
       statuses: statuses,
+      managedExeLiveValues: scan.managedExeLiveValues,
       detectedExternalRules: scan.detectedRules,
       duration: DateTime.now().difference(started),
     );

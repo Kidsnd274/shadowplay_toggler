@@ -95,18 +95,10 @@ class ManagedRuleActionsService {
       );
     }
 
-    final action = (response['action'] as String?) ?? 'deleted';
-
-    // If the driver has already forgotten this exe, just drop the local row
-    // so the UI stops showing a dead entry. This matches the "stale DB
-    // cleanup" branch of [RemoveExclusionService].
-    if (action == 'not_found') {
-      if (rule.id != null) {
-        await _repo.deleteRule(rule.id!);
-      }
-      return const ManagedRuleActionResult(success: true, rowDeleted: true);
-    }
-
+    // Whether the driver actually had a value to delete or it was already
+    // clean, we keep the local row so the user continues to "watch" this
+    // profile. The row just records intendedValue = 0 so re-enabling later
+    // is one click away.
     final updated = rule.copyWith(
       intendedValue: 0,
       updatedAt: DateTime.now(),

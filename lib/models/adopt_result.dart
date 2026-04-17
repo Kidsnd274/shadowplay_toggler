@@ -1,9 +1,12 @@
-/// Outcome of [AdoptRuleService.adoptRule].
+/// Outcome of [AdoptRuleService.adoptRule] /
+/// [AdoptRuleService.adoptAndAddExclusion].
 ///
-/// Adoption is never "destructive" at the driver level — it only writes a
-/// row to the local managed-rules database. The main failure modes are
-/// "the rule vanished between scan time and adoption" (e.g. another tool
-/// deleted the profile) and "the row already exists in the local DB".
+/// Adoption is purely local — only a row in the managed-rules DB is
+/// created. `adoptAndAddExclusion` additionally calls
+/// [NvapiService.applyExclusion] to flip the capture-exclusion on. The
+/// main failure modes are "the row already exists" (soft no-op) and
+/// "NVAPI rejected the request" (hard failure with a message for the
+/// snackbar).
 class AdoptResult {
   /// True if a managed-rules row exists for this exe after the call,
   /// either because we created it now or because it was already there.
@@ -14,14 +17,10 @@ class AdoptResult {
   /// gentler notification.
   final bool alreadyManaged;
 
-  /// True when the live driver read showed a different value than the
-  /// scan snapshot the caller passed in. The local row is written with
-  /// the *live* value, not the stale one; the caller may want to warn
-  /// the user so they know what they actually took ownership of.
-  final bool valueChangedSinceScan;
-
-  /// The live current value that was stored as the adopted rule's
-  /// `intendedValue` / `previousValue`. Hex, e.g. `0x10000000`.
+  /// The current value that was stored as the adopted rule's
+  /// `intendedValue`. Hex, e.g. `0x10000000`. For pure adopts this is
+  /// just the scan snapshot value; for `adoptAndAddExclusion` it is
+  /// `AppConstants.captureDisableValue`.
   final int? adoptedValue;
 
   /// Non-null when [success] is false.
@@ -30,7 +29,6 @@ class AdoptResult {
   const AdoptResult({
     required this.success,
     this.alreadyManaged = false,
-    this.valueChangedSinceScan = false,
     this.adoptedValue,
     this.errorMessage,
   });

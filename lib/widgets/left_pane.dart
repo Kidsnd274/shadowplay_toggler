@@ -158,7 +158,7 @@ class _SearchField extends StatelessWidget {
           style: theme.textTheme.bodyMedium,
           decoration: InputDecoration(
             isDense: true,
-            hintText: 'Search rules…',
+            hintText: 'Search profiles…',
             prefixIcon: const Icon(Icons.search, size: 18),
             prefixIconConstraints: const BoxConstraints(
               minWidth: 32,

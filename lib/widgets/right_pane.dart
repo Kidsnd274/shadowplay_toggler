@@ -4,20 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
 import '../models/managed_rule.dart';
+import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rule_actions_provider.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/selected_rule_provider.dart';
 import '../services/notification_service.dart';
 import 'adopt_rule_button.dart';
 import 'advanced_editor.dart';
 import 'confirmation_dialog.dart';
 
-/// Right-hand detail pane.
-///
-/// This is a minimal implementation that covers Plan 22's requirement
-/// ("the primary toggle should call [RemoveExclusionService] when turning
-/// off an exclusion"). The richer badge/hex-editor layout described in
-/// Plan 20 / Plan 25 is built on top of this shell.
+/// Right-hand detail pane for the currently selected rule.
 class RightPane extends ConsumerWidget {
   const RightPane({super.key});
 
@@ -41,8 +38,9 @@ class RightPane extends ConsumerWidget {
         return _ReadOnlyDetail(
           rule: selected,
           subtitle:
-              'External rule — not managed by this app. Adopt it to start '
-              'managing it from here.',
+              'External profile — not managed by this app. Adopt it to '
+              'start watching it from here, or click "Add Exclusion" to '
+              'adopt and turn the exclusion on in one step.',
           showAdopt: true,
         );
     }
@@ -66,7 +64,7 @@ class _EmptyDetail extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'Select a rule to view details',
+            'Select a profile to view details',
             style: theme.textTheme.bodyMedium,
           ),
         ],
@@ -75,7 +73,7 @@ class _EmptyDetail extends StatelessWidget {
   }
 }
 
-class _ReadOnlyDetail extends StatelessWidget {
+class _ReadOnlyDetail extends ConsumerWidget {
   final ExclusionRule rule;
   final String subtitle;
   final bool showAdopt;
@@ -87,7 +85,7 @@ class _ReadOnlyDetail extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -95,20 +93,65 @@ class _ReadOnlyDetail extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _HeaderRow(rule: rule),
+            _HeaderRow(rule: rule, excluded: rule.currentValue ==
+                AppConstants.captureDisableValue),
             const SizedBox(height: 16),
-            _FieldsBlock(rule: rule),
+            _FieldsBlock(rule: rule, effectiveValue: rule.currentValue),
             const SizedBox(height: 20),
             Text(subtitle, style: theme.textTheme.bodySmall),
             if (showAdopt) ...[
               const SizedBox(height: 16),
-              AdoptRuleButton(rule: rule),
+              Row(
+                children: [
+                  AdoptRuleButton(rule: rule),
+                  const SizedBox(width: 12),
+                  _AddExclusionDetailButton(rule: rule),
+                ],
+              ),
             ],
             const SizedBox(height: 20),
             AdvancedEditor(rule: rule, allowEdit: false),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _AddExclusionDetailButton extends ConsumerStatefulWidget {
+  final ExclusionRule rule;
+  const _AddExclusionDetailButton({required this.rule});
+
+  @override
+  ConsumerState<_AddExclusionDetailButton> createState() =>
+      _AddExclusionDetailButtonState();
+}
+
+class _AddExclusionDetailButtonState
+    extends ConsumerState<_AddExclusionDetailButton> {
+  bool _busy = false;
+
+  Future<void> _onPressed() async {
+    setState(() => _busy = true);
+    try {
+      await addExclusionInteractive(context, ref, widget.rule);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.icon(
+      onPressed: _busy ? null : _onPressed,
+      icon: _busy
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.visibility_off_outlined, size: 16),
+      label: const Text('Add Exclusion'),
     );
   }
 }
@@ -121,36 +164,34 @@ class _ManagedRuleDetail extends ConsumerStatefulWidget {
   ConsumerState<_ManagedRuleDetail> createState() => _ManagedRuleDetailState();
 }
 
-enum _RuleMenuAction { unmanage, deleteProfile }
+enum _RuleMenuAction { unadopt, deleteProfile }
 
 class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   bool _busy = false;
 
-  ManagedRule? _lookupManagedRule() {
-    final rules = ref.read(managedRulesProvider).valueOrNull;
-    if (rules == null) return null;
-    return rules.firstWhere(
-      (r) => r.exePath == widget.rule.exePath,
-      orElse: () => ManagedRule(
-        exePath: widget.rule.exePath,
-        exeName: widget.rule.exeName,
-        profileName: widget.rule.profileName,
-        profileWasPredefined: widget.rule.isPredefined,
-        profileWasCreated: false,
-        intendedValue: widget.rule.currentValue,
-        createdAt: widget.rule.createdAt ?? DateTime.now(),
-        updatedAt: widget.rule.updatedAt ?? DateTime.now(),
-      ),
+  /// Locates the live [ManagedRule] row for the currently-selected
+  /// exclusion. Returns a best-effort synthesized row if the provider
+  /// hasn't emitted yet (first frame after startup), so the UI can still
+  /// render something meaningful.
+  ManagedRule _effectiveManaged(List<ManagedRule>? rules) {
+    if (rules != null) {
+      for (final r in rules) {
+        if (r.exePath == widget.rule.exePath) return r;
+      }
+    }
+    return ManagedRule(
+      exePath: widget.rule.exePath,
+      exeName: widget.rule.exeName,
+      profileName: widget.rule.profileName,
+      profileWasPredefined: widget.rule.isPredefined,
+      profileWasCreated: false,
+      intendedValue: widget.rule.currentValue,
+      createdAt: widget.rule.createdAt ?? DateTime.now(),
+      updatedAt: widget.rule.updatedAt ?? DateTime.now(),
     );
   }
 
-  bool get _exclusionEnabled =>
-      widget.rule.currentValue == AppConstants.captureDisableValue;
-
-  Future<void> _onToggle(bool enabled) async {
-    final managed = _lookupManagedRule();
-    if (managed == null) return;
-
+  Future<void> _onToggle(ManagedRule managed, bool enabled) async {
     setState(() => _busy = true);
     final service = ref.read(managedRuleActionsServiceProvider);
     final result = await service.setExclusionEnabled(managed, enabled);
@@ -159,23 +200,23 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
 
     if (!result.success) {
       NotificationService.showError(
-        result.errorMessage ?? 'Failed to update rule.',
+        result.errorMessage ?? 'Failed to update profile.',
         context: context,
       );
+      // The optimistic state we set may have been wrong; re-query.
+      await ref
+          .read(profileExclusionStateProvider.notifier)
+          .refreshExe(managed.exePath);
       return;
     }
 
+    // The driver state now matches what we just wrote.
+    ref
+        .read(profileExclusionStateProvider.notifier)
+        .setForExe(managed.exePath, enabled);
+
     await ref.read(managedRulesProvider.notifier).refresh();
     if (!mounted) return;
-    if (result.rowDeleted) {
-      ref.read(selectedRuleProvider.notifier).state = null;
-      NotificationService.showInfo(
-        'Driver state was already clean; removed stale row for '
-        '${managed.exeName}.',
-        context: context,
-      );
-      return;
-    }
 
     NotificationService.showSuccess(
       enabled
@@ -183,30 +224,34 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
           : 'Exclusion cleared for ${managed.exeName}.',
       context: context,
     );
-    NotificationService.showRestartTargetHint(managed.exeName, context: context);
+    NotificationService.showRestartTargetHint(
+      managed.exeName,
+      context: context,
+    );
   }
 
-  Future<void> _onMenuAction(_RuleMenuAction action) async {
-    final managed = _lookupManagedRule();
-    if (managed == null) return;
-
+  Future<void> _onMenuAction(
+    ManagedRule managed,
+    _RuleMenuAction action,
+  ) async {
     switch (action) {
-      case _RuleMenuAction.unmanage:
-        await _confirmUnmanage(managed);
+      case _RuleMenuAction.unadopt:
+        await _confirmUnadopt(managed);
       case _RuleMenuAction.deleteProfile:
         await _confirmDeleteProfile(managed);
     }
   }
 
-  Future<void> _confirmUnmanage(ManagedRule managed) async {
+  Future<void> _confirmUnadopt(ManagedRule managed) async {
     final confirmed = await ConfirmationDialog.show(
       context,
-      title: 'Remove ${managed.exeName} from managed list?',
-      message: 'The rule will be removed from this app only. The NVIDIA '
-          'profile and any setting overrides stay exactly as they are on the '
-          "driver — nothing is changed on NVIDIA's side. You can re-adopt "
-          'this rule later from the Detected tab.',
-      confirmLabel: 'Remove from list',
+      title: 'Unadopt ${managed.exeName}?',
+      message: 'Stop watching this profile from this app. The NVIDIA '
+          'profile and any setting overrides stay exactly as they are on '
+          "the driver — nothing is changed on NVIDIA's side. If the "
+          'exclusion is still set, the profile will reappear in the '
+          'Detected tab so you can re-adopt it later.',
+      confirmLabel: 'Unadopt',
     );
     if (!confirmed || !mounted) return;
 
@@ -218,17 +263,42 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
 
     if (!result.success) {
       NotificationService.showError(
-        result.errorMessage ?? 'Failed to remove from list.',
+        result.errorMessage ?? 'Failed to unadopt.',
         context: context,
       );
       return;
     }
 
+    final wasExcluded =
+        ref.read(profileExclusionStateProvider)[managed.exePath] ?? false;
+
+    ref
+        .read(profileExclusionStateProvider.notifier)
+        .removeForExe(managed.exePath);
     await ref.read(managedRulesProvider.notifier).refresh();
     if (!mounted) return;
+
+    // If the exclusion is still live on the driver, surface it back in
+    // the Detected tab immediately so the user sees "where it went".
+    if (wasExcluded) {
+      ref.read(detectedRulesProvider.notifier).addOrUpdateRule(
+            ExclusionRule(
+              exePath: managed.exePath,
+              exeName: managed.exeName,
+              profileName: managed.profileName,
+              isManaged: false,
+              isPredefined: managed.profileWasPredefined,
+              currentValue: AppConstants.captureDisableValue,
+              sourceType: 'external',
+              createdAt: managed.createdAt,
+              updatedAt: managed.updatedAt,
+            ),
+          );
+    }
+
     ref.read(selectedRuleProvider.notifier).state = null;
     NotificationService.showSuccess(
-      '${managed.exeName} is no longer managed by this app.',
+      '${managed.exeName} is no longer watched by this app.',
       context: context,
     );
   }
@@ -247,8 +317,9 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
       title: 'Delete NVIDIA profile "${managed.profileName}"?',
       message: 'This removes the entire profile from NVIDIA\'s driver '
           'database, including every application attached to it and every '
-          'setting override on it — not just the capture-exclusion. This '
-          'cannot be undone from within the app.',
+          'setting override on it — not just the capture-exclusion. The '
+          'profile is also unadopted from this app. This cannot be undone '
+          'from within the app.',
       confirmLabel: 'Delete profile',
       destructive: true,
     );
@@ -268,6 +339,9 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
       return;
     }
 
+    ref
+        .read(profileExclusionStateProvider.notifier)
+        .removeForExe(managed.exePath);
     await ref.read(managedRulesProvider.notifier).refresh();
     if (!mounted) return;
     ref.read(selectedRuleProvider.notifier).state = null;
@@ -280,42 +354,78 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isPredef = widget.rule.isPredefined;
+    final managedRules = ref.watch(managedRulesProvider).valueOrNull;
+    final managed = _effectiveManaged(managedRules);
+    final exclusionState =
+        ref.watch(profileExclusionStateProvider)[managed.exePath];
+    // Treat unknown / missing as "not excluded" for the toggle and badge —
+    // the user can still flip the switch on, and we'll show a missing-
+    // profile note further down if applicable.
+    final exclusionEnabled = exclusionState ?? false;
+    final stateUnknown = exclusionState == null;
+    final isPredef = managed.profileWasPredefined;
+
+    final ruleForFields = widget.rule.copyWith(
+      currentValue: exclusionEnabled
+          ? AppConstants.captureDisableValue
+          : AppConstants.captureEnableValue,
+      isPredefined: isPredef,
+      profileName: managed.profileName,
+    );
+
     return Padding(
       padding: const EdgeInsets.all(20),
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _HeaderRow(rule: widget.rule),
+            _HeaderRow(rule: ruleForFields, excluded: exclusionEnabled),
             const SizedBox(height: 16),
-            _FieldsBlock(rule: widget.rule),
+            _FieldsBlock(
+              rule: ruleForFields,
+              effectiveValue: exclusionEnabled
+                  ? AppConstants.captureDisableValue
+                  : AppConstants.captureEnableValue,
+            ),
             const SizedBox(height: 20),
             _ToggleRow(
-              enabled: _exclusionEnabled,
+              enabled: exclusionEnabled,
               busy: _busy,
-              onChanged: _busy ? null : _onToggle,
-              onMenuAction: _busy ? null : _onMenuAction,
+              onChanged: _busy ? null : (v) => _onToggle(managed, v),
+              onUnadopt: _busy ? null : () => _confirmUnadopt(managed),
+              onMenuAction:
+                  _busy ? null : (action) => _onMenuAction(managed, action),
               profileIsPredefined: isPredef,
             ),
             const SizedBox(height: 8),
             Text(
-              _exclusionEnabled
+              exclusionEnabled
                   ? 'Exclusion is active — NVIDIA capture/Instant Replay '
                       'skip this executable. Toggle off to clear the '
-                      'override without losing the rule.'
+                      'override without losing the profile from your '
+                      'watched list.'
                   : 'Exclusion is cleared — NVIDIA capture behaves as it '
-                      'normally would for this executable. Toggle on to '
-                      're-apply.',
+                      'normally would for this executable. The profile is '
+                      'still watched; toggle on to re-apply.',
               style: theme.textTheme.bodySmall,
             ),
+            if (stateUnknown) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Live driver state for this executable hasn\'t been '
+                'verified yet. Click Scan Profiles to refresh.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Text(
               'Restart the target application for changes to take full effect.',
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 20),
-            AdvancedEditor(rule: widget.rule, allowEdit: true),
+            AdvancedEditor(rule: ruleForFields, allowEdit: true),
           ],
         ),
       ),
@@ -327,6 +437,7 @@ class _ToggleRow extends StatelessWidget {
   final bool enabled;
   final bool busy;
   final ValueChanged<bool>? onChanged;
+  final VoidCallback? onUnadopt;
   final ValueChanged<_RuleMenuAction>? onMenuAction;
   final bool profileIsPredefined;
 
@@ -334,6 +445,7 @@ class _ToggleRow extends StatelessWidget {
     required this.enabled,
     required this.busy,
     required this.onChanged,
+    required this.onUnadopt,
     required this.onMenuAction,
     required this.profileIsPredefined,
   });
@@ -342,7 +454,7 @@ class _ToggleRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest
             .withValues(alpha: 0.35),
@@ -355,24 +467,26 @@ class _ToggleRow extends StatelessWidget {
         children: [
           Icon(
             enabled ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-            size: 20,
+            size: 18,
             color: enabled
                 ? theme.colorScheme.primary
                 : theme.colorScheme.onSurface.withValues(alpha: 0.6),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   'Exclusion enabled',
-                  style: theme.textTheme.bodyLarge?.copyWith(
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 Text(
-                  enabled ? 'Currently hidden from capture' : 'Currently visible to capture',
+                  enabled
+                      ? 'Currently hidden from capture'
+                      : 'Currently visible to capture',
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -380,31 +494,51 @@ class _ToggleRow extends StatelessWidget {
           ),
           if (busy) ...[
             const SizedBox(
-              width: 16,
-              height: 16,
+              width: 14,
+              height: 14,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
           ],
-          Switch(
-            value: enabled,
-            onChanged: onChanged,
+          // Shrink the Material switch down a notch and trim its default
+          // 48x48 tap-target padding so it sits comfortably inline with
+          // the surrounding 40-ish-pixel icon buttons rather than
+          // dominating the row.
+          Transform.scale(
+            scale: 0.85,
+            child: Switch(
+              value: enabled,
+              onChanged: onChanged,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
           ),
           const SizedBox(width: 4),
+          TextButton.icon(
+            onPressed: onUnadopt,
+            icon: const Icon(Icons.bookmark_remove_outlined, size: 16),
+            label: const Text('Unadopt'),
+            style: TextButton.styleFrom(
+              foregroundColor: theme.colorScheme.onSurface,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: 2),
           PopupMenuButton<_RuleMenuAction>(
             enabled: onMenuAction != null,
             tooltip: 'More actions',
-            icon: const Icon(Icons.more_vert),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.more_vert, size: 20),
             onSelected: (v) => onMenuAction?.call(v),
             itemBuilder: (_) => [
               const PopupMenuItem(
-                value: _RuleMenuAction.unmanage,
+                value: _RuleMenuAction.unadopt,
                 child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.playlist_remove_outlined),
-                  title: Text('Remove from managed list'),
-                  subtitle: Text("Local only — driver unchanged"),
+                  leading: Icon(Icons.bookmark_remove_outlined),
+                  title: Text('Unadopt'),
+                  subtitle: Text('Local only — driver unchanged'),
                 ),
               ),
               PopupMenuItem(
@@ -444,7 +578,8 @@ class _ToggleRow extends StatelessWidget {
 
 class _HeaderRow extends StatelessWidget {
   final ExclusionRule rule;
-  const _HeaderRow({required this.rule});
+  final bool excluded;
+  const _HeaderRow({required this.rule, required this.excluded});
 
   @override
   Widget build(BuildContext context) {
@@ -464,24 +599,23 @@ class _HeaderRow extends StatelessWidget {
             ],
           ),
         ),
-        _StatusBadge(rule: rule),
+        _StatusBadge(excluded: excluded),
       ],
     );
   }
 }
 
 class _StatusBadge extends StatelessWidget {
-  final ExclusionRule rule;
-  const _StatusBadge({required this.rule});
+  final bool excluded;
+  const _StatusBadge({required this.excluded});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isExcluded = rule.currentValue == AppConstants.captureDisableValue;
-    final color = isExcluded
+    final color = excluded
         ? theme.colorScheme.primary
         : theme.colorScheme.onSurface.withValues(alpha: 0.5);
-    final label = isExcluded ? 'Excluded' : 'Inactive';
+    final label = excluded ? 'Excluded' : 'Inactive';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -503,7 +637,8 @@ class _StatusBadge extends StatelessWidget {
 
 class _FieldsBlock extends StatelessWidget {
   final ExclusionRule rule;
-  const _FieldsBlock({required this.rule});
+  final int effectiveValue;
+  const _FieldsBlock({required this.rule, required this.effectiveValue});
 
   @override
   Widget build(BuildContext context) {
@@ -521,7 +656,7 @@ class _FieldsBlock extends StatelessWidget {
         ),
         _KeyValue(
           'Current value',
-          '0x${rule.currentValue.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+          '0x${effectiveValue.toRadixString(16).toUpperCase().padLeft(8, '0')}',
         ),
         _KeyValue(
           'Source',
