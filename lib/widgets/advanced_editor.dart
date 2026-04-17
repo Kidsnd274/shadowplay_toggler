@@ -281,7 +281,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
   Future<void> _persistIntendedValue(int value) async {
     // Only managed rules are tracked in the local DB. For detected/default
     // rules we leave persistence to the adopt flow (plan 27).
-    if (widget.rule.sourceType != 'managed') return;
+    if (widget.rule.source != ExclusionSource.managed) return;
 
     final repo = ref.read(managedRulesRepositoryProvider);
     final existing = await repo.getRuleByExePath(widget.rule.exePath);

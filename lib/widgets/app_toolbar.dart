@@ -60,6 +60,14 @@ class AppToolbar extends ConsumerWidget {
           Expanded(
             child: Row(
               mainAxisSize: MainAxisSize.min,
+              // Align on the text baseline rather than the default box-
+              // center so the title (titleLarge) and the "Last scanned"
+              // chip (bodySmall) sit on the same optical line. With
+              // CrossAxisAlignment.center the two texts look visibly
+              // offset because their font boxes have very different
+              // heights.
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
               children: [
                 Text(
                   AppConstants.appTitle,

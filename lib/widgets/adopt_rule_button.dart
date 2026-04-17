@@ -3,12 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/exclusion_rule.dart';
 import '../providers/adopt_rule_provider.dart';
+import '../providers/destructive_mutation.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rules_provider.dart';
-import '../providers/multi_select_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/reconciliation_provider.dart';
-import '../providers/scan_provider.dart';
 import '../providers/selected_rule_provider.dart';
 import '../services/notification_service.dart';
 import 'confirmation_dialog.dart';
@@ -156,7 +155,7 @@ Future<void> _afterAdoptHousekeeping(
   // updates to show the editable controls.
   if (ref.read(selectedRuleProvider) == rule) {
     ref.read(selectedRuleProvider.notifier).state = rule.copyWith(
-      sourceType: 'managed',
+      source: ExclusionSource.managed,
       isManaged: true,
     );
   }
@@ -399,13 +398,10 @@ class _AdoptAllButtonState extends ConsumerState<AdoptAllButton> {
       // `external` ExclusionRule), the last scan snapshot (its detected
       // bucket and managedLiveValues maps are now wrong), and the
       // reconciliation banner (its numbers referenced the old buckets).
-      ref.read(detectedRulesProvider.notifier).clear();
-      ref.read(selectedRuleProvider.notifier).state = null;
-      exitMultiSelect(ref);
-      ref.read(lastScanResultProvider.notifier).state = null;
-      ref.read(lastScanAtProvider.notifier).state = null;
-      ref.read(lastReconciliationProvider.notifier).state = null;
-      await ref.read(managedRulesProvider.notifier).refresh();
+      // Adopt keeps NVIDIA defaults and the live-exclusion map intact
+      // (both remain valid — managed rows just got *added*, not
+      // removed).
+      await afterDestructiveMutation(ref);
 
       if (result.failed == 0) {
         NotificationService.showSuccess(

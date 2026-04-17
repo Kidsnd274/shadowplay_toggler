@@ -16,6 +16,10 @@ final reconciliationServiceProvider = Provider<ReconciliationService>((ref) {
 /// True while the startup reconciliation pass is running. The toolbar
 /// uses this to show a "Reconciling…" indicator without blocking the
 /// first frame of the UI.
+///
+/// Code that needs the scan + reconciliation picture together should
+/// prefer `scanStateProvider` (see `scan_state_provider.dart`) over
+/// reading this and [isScanningProvider] independently.
 final isReconcilingProvider = StateProvider<bool>((ref) => false);
 
 /// The most recent reconciliation outcome. Null until the first startup
@@ -33,6 +37,10 @@ final lastReconciliationProvider =
 /// static error / backup-path buffers are not re-entrant, so allowing
 /// concurrent bridge entry from the main thread while the worker is mid-
 /// scan can corrupt the error channel or the session itself.
+///
+/// Equivalent to `ref.watch(scanStateProvider).isBusy`; retained as a
+/// standalone provider so the common "disable this button" gate can be
+/// a single-line `ref.watch` without pulling in the aggregate.
 final bridgeBusyProvider = Provider<bool>((ref) {
   final scanning = ref.watch(isScanningProvider);
   final reconciling = ref.watch(isReconcilingProvider);

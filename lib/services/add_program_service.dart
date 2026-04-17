@@ -2,10 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import '../constants/app_constants.dart';
-import '../constants/nvapi_status.dart';
 import '../models/add_program_result.dart';
-import '../models/managed_rule.dart';
+import 'apply_exclusion_service.dart';
 import 'managed_rules_repository.dart';
 import 'nvapi_service.dart';
 
@@ -61,8 +59,9 @@ class AddProgramPreview {
 class AddProgramService {
   final NvapiService _nvapi;
   final ManagedRulesRepository _repo;
+  final ApplyExclusionService _apply;
 
-  AddProgramService(this._nvapi, this._repo);
+  AddProgramService(this._nvapi, this._repo, this._apply);
 
   /// Classify an exe path against the live driver state without writing.
   Future<AddProgramPreview> preview(String exePath) async {
@@ -137,6 +136,11 @@ class AddProgramService {
   /// Apply the exclusion and persist the managed rule. Safe to call even
   /// without a prior [preview]; the native layer handles create-or-reuse
   /// profile semantics atomically.
+  ///
+  /// Gates on the .exe / file-exists preconditions locally, then
+  /// delegates the shared "apply + persist" primitive to
+  /// [ApplyExclusionService] so this service, the Adopt flow, and the
+  /// managed-rule Enable action all share the same logic path.
   Future<AddProgramResult> commit(String exePath) async {
     final normalizedPath = p.normalize(exePath);
     final exeName = p.basename(normalizedPath);
@@ -156,86 +160,30 @@ class AddProgramService {
       );
     }
 
-    Map<String, dynamic>? response;
-    try {
-      response = await _nvapi.applyExclusion(normalizedPath);
-    } on NvapiBridgeException catch (e) {
-      return AddProgramResult.error(
-        exePath: normalizedPath,
-        exeName: exeName,
-        message: 'NVAPI error: ${e.message}',
-      );
-    }
-
-    if (response == null || (response['success'] as bool? ?? false) == false) {
-      final rawMsg = (response?['error'] as String?) ?? 'Unknown NVAPI failure';
-      final nvapiStatus = (response?['nvapiStatus'] as num?)?.toInt();
-      final message = humanizeNvapiStatus(
-        nvapiStatus,
-        'Failed to apply exclusion: $rawMsg',
-      );
-      return AddProgramResult.error(
-        exePath: normalizedPath,
-        exeName: exeName,
-        message: message,
-      );
-    }
-
-    final profileName =
-        (response['profileName'] as String?)?.trim().isNotEmpty == true
-            ? response['profileName'] as String
-            : exeName;
-    final profileWasCreated = (response['profileWasCreated'] as bool?) ?? false;
-    final profileWasPredefined =
-        (response['profileWasPredefined'] as bool?) ?? false;
-    final alreadyAttached = (response['alreadyAttached'] as bool?) ?? false;
-    final previousValueHex = response['previousValue'] as String?;
-    final previousValue = _parseHexOrNull(previousValueHex);
-
-    final now = DateTime.now();
-    final existing = await _repo.getRuleByExePath(normalizedPath);
-
-    final rule = ManagedRule(
-      id: existing?.id,
-      exePath: normalizedPath,
-      exeName: exeName,
-      profileName: profileName,
-      profileWasPredefined: profileWasPredefined,
-      profileWasCreated: profileWasCreated,
-      intendedValue: AppConstants.captureDisableValue,
-      previousValue: previousValue ?? existing?.previousValue,
-      driverVersion: existing?.driverVersion,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+    final outcome = await _apply.apply(
+      normalizedPath,
+      operationLabel: 'apply exclusion',
     );
 
-    await _repo.insertRule(rule);
-
-    // If the exe was already attached to a profile and the previous value
-    // matches our target, report "exclusion already applied" — the call was
-    // a no-op on the driver side.
-    final exclusionAlreadyApplied = alreadyAttached &&
-        previousValue == AppConstants.captureDisableValue;
+    if (!outcome.success) {
+      return AddProgramResult.error(
+        exePath: normalizedPath,
+        exeName: exeName,
+        message: outcome.errorMessage ?? 'Failed to apply exclusion.',
+      );
+    }
 
     return AddProgramResult(
       success: true,
       exePath: normalizedPath,
       exeName: exeName,
-      profileName: profileName,
-      profileAlreadyExisted: alreadyAttached,
-      exclusionAlreadyApplied: exclusionAlreadyApplied,
+      profileName: outcome.profileName ?? exeName,
+      profileAlreadyExisted: outcome.alreadyAttached,
+      exclusionAlreadyApplied: outcome.exclusionAlreadyApplied,
       needsUserConfirmation: false,
     );
   }
 
   bool _looksLikeExe(String path) =>
       p.extension(path).toLowerCase() == '.exe';
-
-  int? _parseHexOrNull(String? hex) {
-    if (hex == null || hex.isEmpty) return null;
-    final cleaned = hex.startsWith('0x') || hex.startsWith('0X')
-        ? hex.substring(2)
-        : hex;
-    return int.tryParse(cleaned, radix: 16);
-  }
 }

@@ -1,6 +1,6 @@
-import '../constants/app_constants.dart';
 import '../constants/nvapi_status.dart';
 import '../models/managed_rule.dart';
+import 'apply_exclusion_service.dart';
 import 'managed_rules_repository.dart';
 import 'nvapi_service.dart';
 
@@ -43,8 +43,9 @@ class ManagedRuleActionResult {
 class ManagedRuleActionsService {
   final NvapiService _nvapi;
   final ManagedRulesRepository _repo;
+  final ApplyExclusionService _apply;
 
-  ManagedRuleActionsService(this._nvapi, this._repo);
+  ManagedRuleActionsService(this._nvapi, this._repo, this._apply);
 
   Future<ManagedRuleActionResult> setExclusionEnabled(
     ManagedRule rule,
@@ -60,29 +61,25 @@ class ManagedRuleActionsService {
   }
 
   Future<ManagedRuleActionResult> _enable(ManagedRule rule) async {
-    final response = await _nvapi.applyExclusion(rule.exePath);
-    if (response == null || (response['success'] as bool? ?? false) == false) {
-      final raw = (response?['error'] as String?) ?? 'unknown NVAPI failure';
-      final code = (response?['nvapiStatus'] as num?)?.toInt();
+    // Delegates to the shared primitive. The [ApplyExclusionService]
+    // already handles NVAPI error humanisation, row persistence, and
+    // "driver updated / DB write failed" partial-success reporting —
+    // keeping the logic in one place means a fix for the detail pane
+    // automatically benefits the Add-Program and Adopt flows too.
+    final outcome = await _apply.apply(
+      rule.exePath,
+      preFetchedExisting: rule,
+      operationLabel: 'enable exclusion',
+    );
+    if (!outcome.success) {
       return ManagedRuleActionResult.failure(
-        humanizeNvapiStatus(code, 'Failed to enable exclusion: $raw'),
+        outcome.errorMessage ?? 'Failed to enable exclusion.',
       );
     }
-
-    final profileName =
-        (response['profileName'] as String?)?.trim().isNotEmpty == true
-            ? response['profileName'] as String
-            : rule.profileName;
-    final profileWasPredefined =
-        (response['profileWasPredefined'] as bool?) ?? rule.profileWasPredefined;
-    final updated = rule.copyWith(
-      profileName: profileName,
-      profileWasPredefined: profileWasPredefined,
-      intendedValue: AppConstants.captureDisableValue,
-      updatedAt: DateTime.now(),
+    return ManagedRuleActionResult(
+      success: true,
+      updatedRule: outcome.updatedRule,
     );
-    await _repo.insertRule(updated);
-    return ManagedRuleActionResult(success: true, updatedRule: updated);
   }
 
   Future<ManagedRuleActionResult> _disable(ManagedRule rule) async {

@@ -26,16 +26,22 @@ class RightPane extends ConsumerWidget {
       return const _EmptyDetail();
     }
 
-    switch (selected.sourceType) {
-      case 'managed':
+    switch (selected.source) {
+      case ExclusionSource.managed:
         return _ManagedRuleDetail(rule: selected);
-      case 'nvidia_default':
+      case ExclusionSource.nvidiaDefault:
         return _ReadOnlyDetail(
           rule: selected,
           subtitle: 'NVIDIA-predefined profile. Read-only.',
         );
-      case 'external':
-      default:
+      case ExclusionSource.inherited:
+        return _ReadOnlyDetail(
+          rule: selected,
+          subtitle:
+              'Inherited from the DRS Base / Global profile. Applies to '
+              'every app that does not have its own override.',
+        );
+      case ExclusionSource.external:
         return _ReadOnlyDetail(
           rule: selected,
           subtitle:
@@ -54,26 +60,28 @@ class _EmptyDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Pinned to the top with comfortable breathing room. The user's mental
-    // model is "the detail pane reads top-down", so anchoring the empty
-    // hint at the top matches the loaded state's layout.
+    // Center the hint in the available pane. This only runs when no
+    // profile is selected, so it doesn't touch the loaded detail layout
+    // (which still anchors top-left via its own Padding + Column).
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 96, 24, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.touch_app_outlined,
-            size: 48,
-            color: theme.textTheme.bodySmall?.color,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Select a profile to view details',
-            style: theme.textTheme.bodyMedium,
-          ),
-        ],
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.touch_app_outlined,
+              size: 48,
+              color: theme.textTheme.bodySmall?.color,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Select a profile to view details',
+              style: theme.textTheme.bodyMedium,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -310,7 +318,7 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
               isManaged: false,
               isPredefined: managed.profileWasPredefined,
               currentValue: AppConstants.captureDisableValue,
-              sourceType: 'external',
+              source: ExclusionSource.external,
               createdAt: managed.createdAt,
               updatedAt: managed.updatedAt,
             ),
@@ -728,12 +736,11 @@ class _FieldsBlock extends StatelessWidget {
         ),
         _KeyValue(
           'Source',
-          switch (rule.sourceType) {
-            'managed' => 'Managed by this app',
-            'external' => 'External override',
-            'nvidia_default' => 'NVIDIA default',
-            'inherited' => 'Inherited (Base / Global)',
-            _ => rule.sourceType,
+          switch (rule.source) {
+            ExclusionSource.managed => 'Managed by this app',
+            ExclusionSource.external => 'External override',
+            ExclusionSource.nvidiaDefault => 'NVIDIA default',
+            ExclusionSource.inherited => 'Inherited (Base / Global)',
           },
         ),
       ],

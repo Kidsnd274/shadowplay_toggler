@@ -114,7 +114,8 @@ class ScanService {
       nvidiaDefaults: classification.defaults,
       driftedManagedRules: classification.drifted,
       orphanedManagedRules: classification.orphans,
-      baseProfileRule: baseRule?.toExclusionRule(sourceType: 'inherited'),
+      baseProfileRule:
+          baseRule?.toExclusionRule(source: ExclusionSource.inherited),
       managedExeLiveValues: classification.managedLiveValues,
       totalProfilesScanned: profilesScanned,
       totalSettingsFound: settingsFound,
@@ -156,9 +157,9 @@ class ScanService {
         // default if the value is predefined, otherwise a profile-level
         // external rule. Either way, no exe to tie to the managed DB.
         if (s.isCurrentPredefined) {
-          defaults.add(s.toExclusionRule(sourceType: 'nvidia_default'));
+          defaults.add(s.toExclusionRule(source: ExclusionSource.nvidiaDefault));
         } else {
-          detected.add(s.toExclusionRule(sourceType: 'external'));
+          detected.add(s.toExclusionRule(source: ExclusionSource.external));
         }
         continue;
       }
@@ -177,7 +178,7 @@ class ScanService {
             isPredefined: match.profileWasPredefined,
             currentValue: s.currentValue,
             previousValue: match.intendedValue,
-            sourceType: 'managed',
+            source: ExclusionSource.managed,
             createdAt: match.createdAt,
             updatedAt: match.updatedAt,
           ));
@@ -196,9 +197,9 @@ class ScanService {
       }
 
       if (s.isCurrentPredefined) {
-        defaults.add(s.toExclusionRule(sourceType: 'nvidia_default'));
+        defaults.add(s.toExclusionRule(source: ExclusionSource.nvidiaDefault));
       } else {
-        detected.add(s.toExclusionRule(sourceType: 'external'));
+        detected.add(s.toExclusionRule(source: ExclusionSource.external));
       }
     }
 
@@ -215,7 +216,7 @@ class ScanService {
         isManaged: true,
         isPredefined: rule.profileWasPredefined,
         currentValue: rule.intendedValue,
-        sourceType: 'managed',
+        source: ExclusionSource.managed,
         createdAt: rule.createdAt,
         updatedAt: rule.updatedAt,
       ));

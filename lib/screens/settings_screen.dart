@@ -8,15 +8,10 @@ import 'package:path/path.dart' as p;
 import '../constants/app_constants.dart';
 import '../models/rules_export.dart';
 import '../providers/database_provider.dart';
-import '../providers/detected_rules_provider.dart';
+import '../providers/destructive_mutation.dart';
 import '../providers/managed_rules_provider.dart';
-import '../providers/multi_select_provider.dart';
-import '../providers/nvidia_defaults_provider.dart';
-import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/reconciliation_provider.dart';
 import '../providers/rules_export_provider.dart';
-import '../providers/scan_provider.dart';
-import '../providers/selected_rule_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/notification_service.dart';
 import '../services/reset_database_service.dart';
@@ -410,16 +405,15 @@ class _ResetDatabaseSectionState
       // Anything that holds an id/exePath the user selected or a scan
       // snapshot taken before the wipe has to be discarded, otherwise
       // the UI will render phantom rows (and crash if the user clicks
-      // one) until the next reconciliation round-trips.
-      ref.read(detectedRulesProvider.notifier).clear();
-      ref.read(nvidiaDefaultsProvider.notifier).clear();
-      ref.read(profileExclusionStateProvider.notifier).setAll(const {});
-      ref.read(selectedRuleProvider.notifier).state = null;
-      exitMultiSelect(ref);
-      ref.read(lastScanResultProvider.notifier).state = null;
-      ref.read(lastScanAtProvider.notifier).state = null;
-      ref.read(lastReconciliationProvider.notifier).state = null;
-      await ref.read(managedRulesProvider.notifier).refresh();
+      // one) until the next reconciliation round-trips. Reset DB is
+      // the one flow that also wipes the Defaults cache and the live
+      // exclusion map (those are keyed on rows that literally no
+      // longer exist).
+      await afterDestructiveMutation(
+        ref,
+        clearDefaults: true,
+        clearLiveExclusionState: true,
+      );
 
       // The auto-scan toggle is loaded from the now-empty app_state
       // table — nudge the provider to re-read so the Settings screen

@@ -3,6 +3,7 @@ import '../models/adopt_result.dart';
 import '../models/app_exception.dart';
 import '../models/exclusion_rule.dart';
 import '../models/managed_rule.dart';
+import 'apply_exclusion_service.dart';
 import 'managed_rules_repository.dart';
 import 'nvapi_service.dart';
 
@@ -16,8 +17,9 @@ import 'nvapi_service.dart';
 class AdoptRuleService {
   final NvapiService _nvapi;
   final ManagedRulesRepository _repo;
+  final ApplyExclusionService _apply;
 
-  AdoptRuleService(this._nvapi, this._repo);
+  AdoptRuleService(this._nvapi, this._repo, this._apply);
 
   /// Watch a previously-external profile from this app. Adoption is
   /// purely local — the NVIDIA driver is never mutated. The exclusion
@@ -88,33 +90,25 @@ class AdoptRuleService {
   /// the driver. Used by the "Add Exclusion" action in the Detected tab
   /// (and from the Add-Program flow when the executable was already on
   /// a profile but the exclusion wasn't set yet).
+  ///
+  /// Adopt-first (local DB insert) means "apply failed" still leaves
+  /// the user in a sane place: the rule is watched but the driver
+  /// value is whatever it was before. The [ApplyExclusionService]
+  /// call is what turns the driver value on; its error message is
+  /// prefixed with "Adopted, but…" so the UI can tell the user the
+  /// first half worked.
   Future<AdoptResult> adoptAndAddExclusion(ExclusionRule detected) async {
     final adopt = await adoptRule(detected);
     if (!adopt.success || adopt.alreadyManaged) return adopt;
 
-    Map<String, dynamic>? response;
-    try {
-      response = await _nvapi.applyExclusion(detected.exePath);
-    } on NvapiException catch (e) {
+    final outcome = await _apply.apply(
+      detected.exePath,
+      operationLabel: 'set exclusion',
+    );
+    if (!outcome.success) {
       return AdoptResult.failure(
-        'Adopted, but failed to set exclusion: ${e.message}',
+        'Adopted, but ${outcome.errorMessage ?? "failed to set exclusion."}',
       );
-    }
-
-    final ok = (response?['success'] as bool?) ?? false;
-    if (!ok) {
-      final err = (response?['error'] as String?) ?? 'unknown NVAPI failure';
-      return AdoptResult.failure(
-        'Adopted, but failed to set exclusion: $err',
-      );
-    }
-
-    final existing = await _repo.getRuleByExePath(detected.exePath);
-    if (existing != null) {
-      await _repo.insertRule(existing.copyWith(
-        intendedValue: AppConstants.captureDisableValue,
-        updatedAt: DateTime.now(),
-      ));
     }
 
     return AdoptResult(

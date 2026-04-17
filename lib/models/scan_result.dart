@@ -48,12 +48,12 @@ class ScannedRule {
     return appExePath.substring(i + 1);
   }
 
-  ExclusionRule toExclusionRule({required String sourceType}) {
+  ExclusionRule toExclusionRule({required ExclusionSource source}) {
     return ExclusionRule(
       exePath: appExePath,
       exeName: exeName,
       profileName: profileName,
-      isManaged: sourceType == 'managed',
+      isManaged: source == ExclusionSource.managed,
       // Treat a rule as predefined if *either* the profile or the
       // application entry is flagged that way by NVAPI. A
       // user-attached app inside a predefined profile is not our
@@ -65,7 +65,7 @@ class ScannedRule {
       // F-40.
       isPredefined: profileIsPredefined || appIsPredefined,
       currentValue: currentValue,
-      sourceType: sourceType,
+      source: source,
     );
   }
 
