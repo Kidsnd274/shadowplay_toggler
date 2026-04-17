@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 
 import '../constants/app_constants.dart';
@@ -27,9 +28,7 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-      ),
+      appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: const [
@@ -203,8 +202,7 @@ class _ExportImportSectionState extends ConsumerState<_ExportImportSection> {
 
     ref.read(isExportingOrImportingRulesProvider.notifier).state = true;
     try {
-      final n =
-          await ref.read(rulesExportServiceProvider).exportToFile(picked);
+      final n = await ref.read(rulesExportServiceProvider).exportToFile(picked);
       if (!mounted) return;
       NotificationService.showSuccess(
         'Exported $n rule${n == 1 ? '' : 's'} to ${p.basename(picked)}.',
@@ -243,8 +241,7 @@ class _ExportImportSectionState extends ConsumerState<_ExportImportSection> {
     ref.read(isExportingOrImportingRulesProvider.notifier).state = true;
     RulesImportResult? result;
     try {
-      result =
-          await ref.read(rulesExportServiceProvider).importFromFile(path);
+      result = await ref.read(rulesExportServiceProvider).importFromFile(path);
     } on FormatException catch (e) {
       if (!mounted) return;
       NotificationService.showError(
@@ -303,9 +300,9 @@ class _LogsSection extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: OutlinedButton.icon(
               onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const LogsScreen()),
-                );
+                Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const LogsScreen()));
               },
               icon: const Icon(Icons.subject, size: 16),
               label: const Text('View Logs'),
@@ -325,8 +322,7 @@ class _ResetDatabaseSection extends ConsumerStatefulWidget {
       _ResetDatabaseSectionState();
 }
 
-class _ResetDatabaseSectionState
-    extends ConsumerState<_ResetDatabaseSection> {
+class _ResetDatabaseSectionState extends ConsumerState<_ResetDatabaseSection> {
   bool _busy = false;
 
   @override
@@ -387,7 +383,8 @@ class _ResetDatabaseSectionState
     final confirmed = await ConfirmationDialog.show(
       context,
       title: 'Reset local database?',
-      message: 'This deletes every row in your Managed list and every '
+      message:
+          'This deletes every row in your Managed list and every '
           'saved preference. Existing NVIDIA driver exclusions are not '
           'touched and can be re-adopted via the Detected tab after the '
           'next scan. This cannot be undone.',
@@ -430,10 +427,7 @@ class _ResetDatabaseSectionState
       NotificationService.showError(e.message, context: context);
     } catch (e) {
       if (!mounted) return;
-      NotificationService.showError(
-        'Reset failed: $e',
-        context: context,
-      );
+      NotificationService.showError('Reset failed: $e', context: context);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -445,45 +439,52 @@ class _AboutSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return _SectionCard(
-      icon: Icons.info_outline,
-      title: 'About',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            AppConstants.appTitle,
-            style: theme.textTheme.titleMedium,
+    return FutureBuilder<PackageInfo>(
+      future: PackageInfo.fromPlatform(),
+      builder: (context, snapshot) {
+        final theme = Theme.of(context);
+        final version = snapshot.data?.version ?? 'Unknown';
+
+        return _SectionCard(
+          icon: Icons.info_outline,
+          title: 'About',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(AppConstants.appTitle, style: theme.textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                'Per-application NVIDIA ShadowPlay / Instant Replay capture '
+                'exclusion manager.',
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              _AboutRow(label: 'Version', value: version),
+              _AboutRow(
+                label: 'Capture setting',
+                value:
+                    '0x${AppConstants.captureSettingId.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+              ),
+              _AboutRow(
+                label: 'Platform',
+                value:
+                    '${Platform.operatingSystem} '
+                    '${Platform.operatingSystemVersion}',
+              ),
+              _AboutRow(label: 'Dart version', value: Platform.version),
+              const SizedBox(height: 12),
+              Text(
+                'NVIDIA driver settings are read and written via NVAPI. '
+                'This app never collects or transmits any data — every '
+                'operation is local to your machine.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Per-application NVIDIA ShadowPlay / Instant Replay capture '
-            'exclusion manager.',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 12),
-          _AboutRow(
-            label: 'Capture setting',
-            value: '0x${AppConstants.captureSettingId.toRadixString(16).toUpperCase().padLeft(8, '0')}',
-          ),
-          _AboutRow(
-            label: 'Platform',
-            value: '${Platform.operatingSystem} '
-                '${Platform.operatingSystemVersion}',
-          ),
-          _AboutRow(label: 'Dart version', value: Platform.version),
-          const SizedBox(height: 12),
-          Text(
-            'NVIDIA driver settings are read and written via NVAPI. '
-            'This app never collects or transmits any data — every '
-            'operation is local to your machine.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -511,10 +512,7 @@ class _AboutRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: SelectableText(
-              value,
-              style: theme.textTheme.bodySmall,
-            ),
+            child: SelectableText(value, style: theme.textTheme.bodySmall),
           ),
         ],
       ),
