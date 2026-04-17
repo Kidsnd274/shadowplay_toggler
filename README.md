@@ -107,9 +107,6 @@ a rule uses NVAPI's *restore default* path rather than writing a guessed
 value. Nothing the app does is outside what Profile Inspector can already
 do.
 
-**Does it need admin?**
-No. DRS writes go through NVAPI on your own user session.
-
 **My rules disappeared after a driver update — did the app lose them?**
 No. Clean driver installs can wipe DRS. The app keeps its own record of
 your rules and, on next launch, detects the reset and offers a one-click

@@ -52,6 +52,15 @@ Future<void> _bootstrap() async {
 
   final container = ProviderContainer();
 
+  // Plan F-51: wire native bridge_log() output into the LogBuffer
+  // before the first DLL call, so bridge_initialize()'s own log lines
+  // (e.g. "NvAPI_Initialize -> 0") end up on the Logs screen rather
+  // than only in `flutter run`'s stderr. Reading bridgeFfiProvider
+  // here eagerly loads the DLL, which is exactly what we want — the
+  // first subsequent NVAPI call (via HomeScreen.initState) will reuse
+  // the same BridgeFfi instance from the provider container.
+  _installBridgeLogForwarding(container);
+
   await container.read(databaseServiceProvider).initialize();
 
   _appLifecycleListener = AppLifecycleListener(
@@ -72,10 +81,10 @@ Future<void> _bootstrap() async {
 
 /// Wires `debugPrint` (the channel Flutter framework noise comes through)
 /// into [LogBuffer] so the in-app Logs viewer captures it alongside
-/// regular `print()` output. The native bridge already mirrors its
-/// messages to stderr, which `runZoned` cannot intercept, so those still
-/// require a `flutter run` console — but framework / Dart-side noise is
-/// fully covered.
+/// regular `print()` output. Plan F-51 additionally routes the native
+/// bridge's `bridge_log` output through [_installBridgeLogForwarding],
+/// so the Logs screen now covers framework + Dart-side *and* native
+/// NVAPI noise without needing a `flutter run` console.
 void _installLogTeeHandlers() {
   final originalDebugPrint = debugPrint;
   debugPrint = (String? message, {int? wrapWidth}) {
@@ -84,6 +93,32 @@ void _installLogTeeHandlers() {
     }
     originalDebugPrint(message, wrapWidth: wrapWidth);
   };
+}
+
+/// Plan F-51: forward every `bridge_log(…)` call from the native DLL
+/// into [LogBuffer] so it's visible on the Logs screen.
+///
+/// The callback is registered via a [NativeCallable.listener], which:
+///   * is safe to invoke from NVAPI's internal worker threads, and
+///   * is shared with the scan worker isolate because the DLL is
+///     loaded once per process — `LoadLibrary`/FFI returns the same
+///     module handle, so the global callback pointer stored by
+///     `bridge_set_log_callback` is visible to every call into the
+///     DLL regardless of which isolate made it.
+///
+/// We do a tiny bit of severity inference: the native side only emits
+/// one category of warning today (`"  WARNING: scan exceeded 2000 ms"`),
+/// so we bump those to [LogLevel.warn] and leave everything else at
+/// info. Errors out of the DLL arrive as structured JSON responses,
+/// which the Dart callers already translate into their own log
+/// entries via [NvapiBridgeException], so we don't try to re-parse
+/// them here.
+void _installBridgeLogForwarding(ProviderContainer container) {
+  final bridge = container.read(bridgeFfiProvider);
+  bridge.setLogCallback((line) {
+    final level = line.contains('WARNING') ? LogLevel.warn : LogLevel.info;
+    LogBuffer.instance.add(level, line);
+  });
 }
 
 /// Install top-level handlers for framework errors and unhandled async

@@ -8,6 +8,31 @@
 
 extern "C" {
 
+    // ── Plan F-51: Log bridging ────────────────────────────────────
+    //
+    // Every bridge_log() line is also forwarded to this callback when
+    // set, so the Dart-side LogBuffer / Logs screen can mirror the
+    // native bridge's operational output without shelling out to
+    // `flutter run`'s stderr.
+    //
+    // Contract:
+    //   * `message` is a heap-allocated UTF-8 string whose ownership
+    //     transfers to the callback. The caller MUST release it via
+    //     bridge_free_json when finished (this is what lets the Dart
+    //     NativeCallable.listener receive the pointer asynchronously
+    //     without worrying about the native call's stack frame).
+    //   * The callback may be invoked from any thread — NVAPI spawns
+    //     internal workers, and the scan worker isolate also calls
+    //     back in through the same DLL instance.
+    //   * Passing nullptr unregisters.
+    //
+    // Must be called exactly once on the Dart isolate that owns the
+    // NativeCallable; re-registering from a different isolate would
+    // orphan the previous listener.
+
+    typedef void (*BridgeLogCallback)(const char* message);
+    BRIDGE_API void bridge_set_log_callback(BridgeLogCallback cb);
+
     // ── Plan 06: Initialize / Shutdown ─────────────────────────────
     //
     // bridge_get_error_message returns a pointer to an internal static

@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <shlobj.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
@@ -9,6 +10,19 @@
 #include "nvapi.h"
 
 // ── Logging ────────────────────────────────────────────────────────
+
+// Forward decls — bridge_log needs to allocate a heap buffer to hand
+// off to the Dart-side log listener, which is only freed asynchronously
+// once the NativeCallable delivers the message to the main isolate.
+static const char* alloc_json(const std::string& s);
+
+// Plan F-51: optional callback that mirrors every log line into the
+// Dart-side LogBuffer. Atomic so concurrent NVAPI worker threads can
+// safely read the pointer while the main isolate (re-)registers it.
+// A plain aligned pointer is already atomic on x86_64 Windows, but
+// std::atomic documents the intent and will keep us honest if this
+// library ever grows out of its x86_64 assumption.
+static std::atomic<BridgeLogCallback> g_log_callback{nullptr};
 
 static void bridge_log(const char* fmt, ...) {
     char buf[1024];
@@ -25,6 +39,23 @@ static void bridge_log(const char* fmt, ...) {
     // Keep messages operational-only; avoid secrets/PII in log args.
     std::fprintf(stderr, "[ShadowPlayBridge] %s\n", buf);
     std::fflush(stderr);
+
+    // Plan F-51: mirror into the Dart-side LogBuffer when registered.
+    // We copy into a heap string because NativeCallable.listener is
+    // asynchronous — the stack `buf` is long gone by the time the main
+    // isolate processes the message. Ownership transfers to the
+    // callback; the Dart side releases via bridge_free_json.
+    if (auto cb = g_log_callback.load(std::memory_order_acquire)) {
+        std::string msg = "[ShadowPlayBridge] ";
+        msg += buf;
+        if (const char* payload = alloc_json(msg)) {
+            cb(payload);
+        }
+    }
+}
+
+void bridge_set_log_callback(BridgeLogCallback cb) {
+    g_log_callback.store(cb, std::memory_order_release);
 }
 
 // ── Globals ────────────────────────────────────────────────────────

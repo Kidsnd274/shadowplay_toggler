@@ -21,6 +21,13 @@ typedef _StrReturnsIntC = Int32 Function(Pointer<Utf8> str);
 typedef _AddAppC = Int32 Function(Int32 profileIndex, Pointer<Utf8> appName);
 typedef _ScanRulesC = Pointer<Utf8> Function(Uint32 settingId);
 
+/// Plan F-51: matches the C `BridgeLogCallback` typedef in `bridge.h`.
+/// `NativeCallable.listener` produces a function pointer with this
+/// shape and hands it to `bridge_set_log_callback`.
+typedef _BridgeLogCallbackC = Void Function(Pointer<Utf8> message);
+typedef _SetLogCallbackC = Void Function(
+    Pointer<NativeFunction<_BridgeLogCallbackC>> cb);
+
 // ── Dart signatures ─────────────────────────────────────────────
 
 typedef _VoidVoidDart = void Function();
@@ -39,9 +46,20 @@ typedef _SettingOpDart = int Function(int profileIndex, int settingId);
 typedef _StrReturnsIntDart = int Function(Pointer<Utf8> str);
 typedef _AddAppDart = int Function(int profileIndex, Pointer<Utf8> appName);
 typedef _ScanRulesDart = Pointer<Utf8> Function(int settingId);
+typedef _SetLogCallbackDart = void Function(
+    Pointer<NativeFunction<_BridgeLogCallbackC>> cb);
 
 class BridgeFfi {
   late final DynamicLibrary _lib;
+
+  // Log bridging (plan F-51)
+  late final _SetLogCallbackDart _setLogCallback;
+
+  /// Retained so the GC doesn't collect the native-callable trampoline
+  /// while the DLL still holds a pointer to it. Non-null only on the
+  /// isolate that called [setLogCallback] — the scan worker isolate
+  /// uses its own [BridgeFfi] and never registers a listener.
+  NativeCallable<_BridgeLogCallbackC>? _logCallable;
 
   // Lifecycle
   late final int Function() initialize;
@@ -91,6 +109,14 @@ class BridgeFfi {
   }
 
   void _bindAll() {
+    // Log bridging (plan F-51). Resolved first so setLogCallback is
+    // usable the moment the BridgeFfi ctor returns — we want the Dart
+    // listener wired up *before* any other native call runs, otherwise
+    // bridge_initialize()'s own log lines are lost.
+    _setLogCallback =
+        _lib.lookupFunction<_SetLogCallbackC, _SetLogCallbackDart>(
+            'bridge_set_log_callback');
+
     // Lifecycle
     initialize =
         _lib.lookupFunction<_IntVoidC, _IntVoidDart>('bridge_initialize');
@@ -291,6 +317,54 @@ class BridgeFfi {
     final ptr = _getDefaultBackupPath();
     if (ptr == nullptr) return '';
     return ptr.toDartString();
+  }
+
+  // ── Log bridging (plan F-51) ────────────────────────────────────
+
+  /// Wire every `bridge_log(…)` line from the native DLL into [callback].
+  /// Call this once, on the main isolate, before any other bridge call
+  /// — register it after [BridgeFfi] is constructed but before
+  /// `bridge_initialize()` runs, otherwise the init-time log lines
+  /// from the DLL are discarded.
+  ///
+  /// The callback runs asynchronously on this isolate's event loop
+  /// (via [NativeCallable.listener]), which is exactly what makes it
+  /// safe for NVAPI worker threads *and* the scan worker isolate to
+  /// call back in — both share the DLL and therefore the same global
+  /// `g_log_callback` pointer.
+  ///
+  /// Re-registering replaces (and closes) the previous listener. The
+  /// native side takes ownership of the heap-allocated message; we
+  /// free it via [_freeJson] once Dart has copied it to a String, so
+  /// the DLL's [alloc_json] output matches [bridge_free_json]'s
+  /// deallocator.
+  void setLogCallback(void Function(String message) callback) {
+    _logCallable?.close();
+    final callable = NativeCallable<_BridgeLogCallbackC>.listener(
+      (Pointer<Utf8> msg) {
+        if (msg == nullptr) return;
+        try {
+          callback(msg.toDartString());
+        } catch (_) {
+          // Never let a Dart-side logging bug take down the app.
+          // Swallow and still free the native buffer below.
+        } finally {
+          _freeJson(msg);
+        }
+      },
+    );
+    _logCallable = callable;
+    _setLogCallback(callable.nativeFunction);
+  }
+
+  /// Stops forwarding native log lines into Dart. Safe to call even if
+  /// no callback was registered; harmless to call repeatedly.
+  void clearLogCallback() {
+    _setLogCallback(
+      Pointer<NativeFunction<_BridgeLogCallbackC>>.fromAddress(0),
+    );
+    _logCallable?.close();
+    _logCallable = null;
   }
 
   // ── Internal helpers ────────────────────────────────────────────
