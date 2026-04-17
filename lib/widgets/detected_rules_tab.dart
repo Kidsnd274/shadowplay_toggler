@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/search_provider.dart';
+import 'adopt_rule_button.dart';
 import 'rule_list_tile.dart';
 
 /// "Detected" tab content: lists driver profiles whose capture-exclusion
@@ -28,19 +29,47 @@ class DetectedRulesTab extends ConsumerWidget {
       return const _NoDetectedState();
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      itemCount: rules.length,
-      itemBuilder: (context, i) {
-        final rule = rules[i];
-        return RuleListTile(
-          rule: rule,
-          sourceBadge: RuleSourceBadge.external,
-          statusColor: const Color(0xFFFFB74D),
-          statusTooltip: 'External rule — source unknown',
-          trailingHint: 'Adopt',
-        );
-      },
+    final theme = Theme.of(context);
+
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: rules.length,
+            itemBuilder: (context, i) {
+              final rule = rules[i];
+              return RuleListTile(
+                rule: rule,
+                sourceBadge: RuleSourceBadge.external,
+                statusColor: const Color(0xFFFFB74D),
+                statusTooltip: 'External profile — source unknown',
+                trailingWidget: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AdoptInlineButton(rule: rule),
+                    const SizedBox(width: 6),
+                    AddExclusionInlineButton(rule: rule),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        // Pin "Adopt All" to the bottom-right of the left pane so it sits
+        // out of the way and doesn't shove the rules list down on every
+        // scan.
+        Container(
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: theme.dividerTheme.color ?? Colors.transparent,
+              ),
+            ),
+          ),
+          child: const AdoptAllButton(),
+        ),
+      ],
     );
   }
 }

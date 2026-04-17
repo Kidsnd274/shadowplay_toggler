@@ -719,6 +719,64 @@ const char* bridge_clear_exclusion(const char* appName) {
     return alloc_json(json);
 }
 
+// ── Delete Profile (destructive) ───────────────────────────────────
+//
+// Look up a profile by name and delete it outright. Refuses to touch
+// NVIDIA-predefined profiles (NvAPI_DRS_DeleteProfile would fail with
+// INVALID_USER_PRIVILEGE anyway, but we short-circuit to give the
+// caller a clearer error message). Saves settings on success.
+
+const char* bridge_delete_profile(const char* profileName) {
+    bridge_log("bridge_delete_profile(\"%s\")", profileName ? profileName : "(null)");
+    if (!g_session || !profileName)
+        return alloc_json("{\"success\":false,\"error\":\"invalid args\"}");
+
+    NvAPI_UnicodeString wideName = {};
+    utf8_to_nvu16(profileName, wideName, NVAPI_UNICODE_STRING_MAX);
+
+    NvDRSProfileHandle hProfile = 0;
+    NvAPI_Status status = NvAPI_DRS_FindProfileByName(g_session, wideName, &hProfile);
+    bridge_log("  FindProfileByName -> %d", static_cast<int>(status));
+
+    if (status == NVAPI_PROFILE_NOT_FOUND) {
+        std::string safe = escape_json_string(profileName);
+        std::string json = "{\"success\":true,\"action\":\"not_found\""
+                           ",\"profileName\":\"" + safe + "\"}";
+        return alloc_json(json);
+    }
+    if (status != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "find profile failed", static_cast<int>(status)));
+    }
+
+    NVDRS_PROFILE profileInfo = {};
+    profileInfo.version = NVDRS_PROFILE_VER;
+    NvAPI_Status infoStatus = NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+    if (infoStatus == NVAPI_OK && profileInfo.isPredefined) {
+        return alloc_json(
+            "{\"success\":false,\"error\":\"cannot delete NVIDIA-predefined profile\"}");
+    }
+
+    status = NvAPI_DRS_DeleteProfile(g_session, hProfile);
+    bridge_log("  NvAPI_DRS_DeleteProfile -> %d", static_cast<int>(status));
+    if (status != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "delete profile failed", static_cast<int>(status)));
+    }
+
+    status = NvAPI_DRS_SaveSettings(g_session);
+    bridge_log("  SaveSettings -> %d", static_cast<int>(status));
+    if (status != NVAPI_OK) {
+        return alloc_json(build_error_json(
+            "save failed", static_cast<int>(status)));
+    }
+
+    std::string safe = escape_json_string(profileName);
+    std::string json = "{\"success\":true,\"action\":\"deleted\""
+                       ",\"profileName\":\"" + safe + "\"}";
+    return alloc_json(json);
+}
+
 // ── Plan 23: Scan Exclusion Rules ──────────────────────────────────
 
 // Emit a single rule tuple as JSON into `out`. Does not add commas; the

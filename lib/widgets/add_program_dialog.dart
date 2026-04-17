@@ -7,6 +7,7 @@ import '../models/exclusion_rule.dart';
 import '../models/managed_rule.dart';
 import '../providers/add_program_provider.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/selected_rule_provider.dart';
 import '../providers/selected_tab_provider.dart';
 import '../services/add_program_service.dart';
@@ -48,6 +49,12 @@ Future<AddProgramResult?> runAddProgramFlow(
 
   if (result != null && result.success && context.mounted) {
     await ref.read(managedRulesProvider.notifier).refresh();
+    // The Add Program flow always ends with the exclusion applied on
+    // the driver, so we can update the live-state map without another
+    // round trip.
+    ref
+        .read(profileExclusionStateProvider.notifier)
+        .setForExe(result.exePath, true);
     _autoSelectNewRule(ref, result);
   }
 
@@ -238,7 +245,7 @@ class _Confirm extends StatelessWidget {
             : 'Create a new exclusion rule';
 
     final body = preview.alreadyInLocalDb
-        ? "A managed rule for '${preview.exeName}' already exists. Re-applying "
+        ? "A managed profile for '${preview.exeName}' already exists. Re-applying "
             "will refresh the NVIDIA profile setting and update the local "
             "record."
         : preview.profileAlreadyExisted

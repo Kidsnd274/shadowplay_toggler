@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../constants/app_constants.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/scan_provider.dart';
 
 class AppToolbar extends ConsumerWidget {
@@ -22,6 +23,7 @@ class AppToolbar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isScanning = ref.watch(isScanningProvider);
+    final isReconciling = ref.watch(isReconcilingProvider);
     final lastScanAt = ref.watch(lastScanAtProvider);
 
     return Container(
@@ -33,12 +35,15 @@ class AppToolbar extends ConsumerWidget {
         ),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Left-hand title + last-scanned chip. Wrapped in a Flexible so the
-          // secondary "Last scanned" line can ellipsize at narrow widths
-          // instead of pushing the right-side buttons into overflow
-          // territory (which manifested as sub-pixel RenderFlex errors).
-          Flexible(
+          // Title + last-scanned chip on the left. `Expanded` (rather than
+          // `Flexible` + `Spacer`) so all the leftover horizontal space is
+          // claimed by this child — otherwise the trailing buttons drift
+          // away from the right edge when the window is wide because the
+          // unfilled portion of a `Flexible` would be left dangling at the
+          // end of the row.
+          Expanded(
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -61,8 +66,19 @@ class AppToolbar extends ConsumerWidget {
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          const Spacer(),
+          if (isReconciling) ...[
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Reconciling…',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(width: 12),
+          ],
           OutlinedButton.icon(
             onPressed: isScanning ? null : onScanProfiles,
             icon: isScanning

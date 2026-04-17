@@ -6,9 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/backup_info.dart';
+import '../models/rules_export.dart';
 import '../providers/backup_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/managed_rules_provider.dart';
+import '../providers/rules_export_provider.dart';
 import '../services/backup_service.dart';
+import '../services/notification_service.dart';
 
 /// Entry point for the Backup / Restore dialog.
 ///
@@ -124,6 +128,8 @@ class _BackupDialog extends ConsumerWidget {
                       _CreateBackupSection(),
                       SizedBox(height: 16),
                       _RestoreSection(),
+                      SizedBox(height: 16),
+                      _RulesExportImportSection(),
                       SizedBox(height: 16),
                       _PreviousBackupsSection(),
                     ],
@@ -489,6 +495,170 @@ class _BackupRow extends ConsumerWidget {
     if (ok != true || !context.mounted) return;
     await ref.read(backupServiceProvider).deleteBackup(info.filePath);
     await ref.read(backupListProvider.notifier).refresh();
+  }
+}
+
+class _RulesExportImportSection extends ConsumerWidget {
+  const _RulesExportImportSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final busy = ref.watch(isExportingOrImportingRulesProvider);
+    final rulesAsync = ref.watch(managedRulesProvider);
+    final count = rulesAsync.valueOrNull?.length ?? 0;
+
+    return _SectionCard(
+      title: 'Export / import managed profiles',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Save your managed exclusion list to a JSON file, or re-apply a '
+            'previously saved list. Useful after a driver reinstall wipes '
+            "NVIDIA's profiles — importing re-creates each exclusion in the "
+            'driver and the managed list in one click.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            count == 0
+                ? 'No managed profiles to export yet.'
+                : '$count managed profile${count == 1 ? '' : 's'} currently in the list.',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ElevatedButton.icon(
+                onPressed: busy || count == 0
+                    ? null
+                    : () => _runExport(context, ref),
+                icon: const Icon(Icons.file_download_outlined, size: 16),
+                label: const Text('Export to JSON…'),
+              ),
+              OutlinedButton.icon(
+                onPressed:
+                    busy ? null : () => _runImport(context, ref),
+                icon: const Icon(Icons.file_upload_outlined, size: 16),
+                label: const Text('Import from JSON…'),
+              ),
+              if (busy) ...[
+                const SizedBox(width: 4),
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _runExport(BuildContext context, WidgetRef ref) async {
+    final suggested = 'shadowplay_rules_${_isoTimestamp()}.json';
+    final picked = await FilePicker.saveFile(
+      dialogTitle: 'Export managed profiles',
+      fileName: suggested,
+      lockParentWindow: true,
+    );
+    if (picked == null) return;
+    if (!context.mounted) return;
+
+    ref.read(isExportingOrImportingRulesProvider.notifier).state = true;
+    try {
+      final count =
+          await ref.read(rulesExportServiceProvider).exportToFile(picked);
+      if (!context.mounted) return;
+      NotificationService.showSuccess(
+        'Exported $count rule${count == 1 ? '' : 's'} to ${p.basename(picked)}.',
+        context: context,
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      NotificationService.showError(
+        'Export failed: $e',
+        context: context,
+      );
+    } finally {
+      ref.read(isExportingOrImportingRulesProvider.notifier).state = false;
+    }
+  }
+
+  Future<void> _runImport(BuildContext context, WidgetRef ref) async {
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: 'Select managed-rules JSON',
+      type: FileType.custom,
+      allowedExtensions: const ['json'],
+      lockParentWindow: true,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+    final path = picked.files.single.path;
+    if (path == null) return;
+    if (!context.mounted) return;
+
+    ref.read(isExportingOrImportingRulesProvider.notifier).state = true;
+    RulesImportResult? result;
+    try {
+      result =
+          await ref.read(rulesExportServiceProvider).importFromFile(path);
+    } on FormatException catch (e) {
+      if (!context.mounted) return;
+      NotificationService.showError(
+        'Import failed: ${e.message}',
+        context: context,
+      );
+      return;
+    } catch (e) {
+      if (!context.mounted) return;
+      NotificationService.showError(
+        'Import failed: $e',
+        context: context,
+      );
+      return;
+    } finally {
+      ref.read(isExportingOrImportingRulesProvider.notifier).state = false;
+    }
+
+    await ref.read(managedRulesProvider.notifier).refresh();
+    if (!context.mounted) return;
+
+    final summary = _summarise(result);
+    if (result.hasFailures) {
+      NotificationService.showError(
+        summary,
+        context: context,
+        details: result.errors.join('\n'),
+      );
+    } else if (result.hasSkips || result.alreadyManaged > 0) {
+      NotificationService.showWarning(summary, context: context);
+    } else {
+      NotificationService.showSuccess(summary, context: context);
+    }
+  }
+
+  String _summarise(RulesImportResult r) {
+    final parts = <String>[];
+    if (r.imported > 0) parts.add('${r.imported} added');
+    if (r.alreadyManaged > 0) parts.add('${r.alreadyManaged} already managed');
+    if (r.skippedMissingFile > 0) {
+      parts.add('${r.skippedMissingFile} skipped (file missing)');
+    }
+    if (r.failed > 0) parts.add('${r.failed} failed');
+    if (parts.isEmpty) return 'Nothing to import (file had no rules).';
+    return 'Import finished: ${parts.join(', ')}.';
+  }
+
+  String _isoTimestamp() {
+    final now = DateTime.now();
+    two(int v) => v.toString().padLeft(2, '0');
+    return '${now.year}${two(now.month)}${two(now.day)}_'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
   }
 }
 

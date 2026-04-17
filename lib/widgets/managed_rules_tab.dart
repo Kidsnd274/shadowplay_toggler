@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
-import '../models/managed_rule.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/multi_select_provider.dart';
+import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/search_provider.dart';
+import 'batch_action_bar.dart';
 import 'rule_list_tile.dart';
 
-/// Managed tab content: lists rules created/managed by this app. Reads from
-/// [filteredManagedRulesProvider] so the search bar in the left pane
+/// Managed tab content: lists NVIDIA profiles this app is watching. Reads
+/// from [filteredManagedRulesProvider] so the search bar in the left pane
 /// transparently filters the list.
 class ManagedRulesTab extends ConsumerWidget {
   const ManagedRulesTab({super.key});
@@ -17,6 +18,9 @@ class ManagedRulesTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final rulesAsync = ref.watch(filteredManagedRulesProvider);
     final query = ref.watch(searchProvider);
+    final multiSelect = ref.watch(multiSelectModeProvider);
+    final selectedIds = ref.watch(selectedRuleIdsProvider);
+    final exclusionStates = ref.watch(profileExclusionStateProvider);
 
     return rulesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -27,40 +31,83 @@ class ManagedRulesTab extends ConsumerWidget {
               ? const _EmptyState()
               : _NoMatchState(query: query);
         }
-        return ListView.builder(
+
+        final list = ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: 4),
           itemCount: rules.length,
           itemBuilder: (context, i) {
             final managed = rules[i];
             final exclusion = ExclusionRule.fromManagedRule(managed);
-            final status = _statusFor(managed);
+            final status = _statusFor(exclusionStates[managed.exePath]);
+            final ruleId = managed.id;
             return RuleListTile(
               rule: exclusion,
               sourceBadge: RuleSourceBadge.managed,
               statusColor: status.color,
               statusTooltip: status.tooltip,
+              multiSelectMode: multiSelect,
+              isChecked: ruleId != null && selectedIds.contains(ruleId),
+              onCheckedChanged: ruleId == null
+                  ? null
+                  : (checked) => _toggleSelected(ref, ruleId, checked),
+              onLongPress: multiSelect
+                  ? null
+                  : () => _enterMultiSelect(ref, ruleId),
             );
           },
+        );
+
+        if (!multiSelect) return list;
+        return Column(
+          children: [
+            const BatchActionBar(),
+            Expanded(child: list),
+          ],
         );
       },
     );
   }
 
-  _RuleStatus _statusFor(ManagedRule rule) {
-    // Plan 16 leaves driver-state verification to a later feature (NVAPI
-    // service wiring). Until then, if the recorded intended value matches
-    // the capture-disable value we show green; otherwise we show yellow to
-    // signal "managed but unverified". Drift (red) will be surfaced once
-    // the NVAPI side publishes live values in plan 26.
-    if (rule.intendedValue == AppConstants.captureDisableValue) {
+  void _toggleSelected(WidgetRef ref, int id, bool checked) {
+    final current = ref.read(selectedRuleIdsProvider);
+    final next = Set<int>.from(current);
+    if (checked) {
+      next.add(id);
+    } else {
+      next.remove(id);
+    }
+    ref.read(selectedRuleIdsProvider.notifier).state = next;
+  }
+
+  void _enterMultiSelect(WidgetRef ref, int? initialId) {
+    ref.read(multiSelectModeProvider.notifier).state = true;
+    ref.read(selectedRuleIdsProvider.notifier).state =
+        initialId == null ? const {} : {initialId};
+  }
+
+  /// Map the live exclusion state into a status dot. We only have two
+  /// signal colours: green when the exclusion is set on the driver,
+  /// grey otherwise. `null` (haven't queried yet, or profile missing
+  /// from the driver) is treated as "not excluded" for colouring
+  /// purposes — the tooltip explains the nuance for users who hover.
+  _RuleStatus _statusFor(bool? excluded) {
+    const greenExcluded = Color(0xFF66BB6A);
+    const neutralCleared = Color(0xFF90A4AE);
+    if (excluded == true) {
       return const _RuleStatus(
-        color: Color(0xFF66BB6A),
-        tooltip: 'Exclusion active (recorded)',
+        color: greenExcluded,
+        tooltip: 'Exclusion active on the driver',
+      );
+    }
+    if (excluded == false) {
+      return const _RuleStatus(
+        color: neutralCleared,
+        tooltip: 'Watched — exclusion is cleared',
       );
     }
     return const _RuleStatus(
-      color: Color(0xFFFFB300),
-      tooltip: 'Managed — not yet verified against driver',
+      color: neutralCleared,
+      tooltip: 'Live state not verified yet — run Scan Profiles to refresh',
     );
   }
 }
@@ -90,7 +137,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'No managed rules yet',
+              'No managed profiles yet',
               style: theme.textTheme.titleSmall,
               textAlign: TextAlign.center,
             ),
@@ -118,7 +165,7 @@ class _NoMatchState extends StatelessWidget {
       padding: const EdgeInsets.all(24),
       child: Center(
         child: Text(
-          "No rules matching '$query'",
+          "No profiles matching '$query'",
           style: theme.textTheme.bodySmall,
           textAlign: TextAlign.center,
         ),
@@ -147,7 +194,7 @@ class _ErrorState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Failed to load rules',
+              'Failed to load profiles',
               style: theme.textTheme.titleSmall,
             ),
             const SizedBox(height: 4),

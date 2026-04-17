@@ -62,6 +62,18 @@ extern "C" {
 
     BRIDGE_API const char* bridge_clear_exclusion(const char* appName);
 
+    // ── Delete Profile (destructive) ───────────────────────────────
+    //
+    // Removes the whole DRS profile from the driver database — every
+    // attached application and every setting on it. Refuses to act on
+    // NVIDIA-predefined profiles. Saves settings on success.
+    //
+    // Returns a JSON object:
+    //   { "success": true,  "action": "deleted",   "profileName": "..." }
+    //   { "success": true,  "action": "not_found", "profileName": "..." }
+    //   { "success": false, "error": "...",        "nvapiStatus": <int> }
+    BRIDGE_API const char* bridge_delete_profile(const char* profileName);
+
     // ── Plan 23: Scan Exclusion Rules ──────────────────────────────
     //
     // Single-crossing full DRS walk. Enumerates every profile, queries

@@ -11,14 +11,35 @@ enum RuleSourceBadge { managed, external, nvidiaDefault }
 /// Tapping the tile selects the rule via [selectedRuleProvider] and
 /// highlights the item. The optional [onSecondaryTap] callback can be wired
 /// by callers to surface a right-click context menu.
+///
+/// When [multiSelectMode] is true, a checkbox replaces the selection
+/// highlight and taps toggle [isChecked] via [onCheckedChanged] instead of
+/// mutating the detail selection. Callers also typically enter multi-select
+/// via [onLongPress] (managed tab only).
 class RuleListTile extends ConsumerWidget {
   final ExclusionRule rule;
   final RuleSourceBadge sourceBadge;
   final Color statusColor;
   final String? statusTooltip;
   final String? trailingHint;
+
+  /// Optional tap handler for [trailingHint]. When provided, the hint text
+  /// is rendered as an inline clickable link (underlined, accent color) and
+  /// tapping it fires this callback instead of selecting the rule.
+  final VoidCallback? onTrailingHintPressed;
+
+  /// Optional custom widget shown on the right-hand side of the tile,
+  /// after the source badge. Useful for inline action buttons (e.g. an
+  /// "Adopt" button on detected rows). When present, the widget is
+  /// responsible for its own tap handling — the list tile's `onTap` still
+  /// fires for taps outside the widget.
+  final Widget? trailingWidget;
   final bool dimmed;
   final VoidCallback? onSecondaryTap;
+  final VoidCallback? onLongPress;
+  final bool multiSelectMode;
+  final bool isChecked;
+  final ValueChanged<bool>? onCheckedChanged;
 
   const RuleListTile({
     super.key,
@@ -27,15 +48,21 @@ class RuleListTile extends ConsumerWidget {
     required this.statusColor,
     this.statusTooltip,
     this.trailingHint,
+    this.onTrailingHintPressed,
+    this.trailingWidget,
     this.dimmed = false,
     this.onSecondaryTap,
+    this.onLongPress,
+    this.multiSelectMode = false,
+    this.isChecked = false,
+    this.onCheckedChanged,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final selected = ref.watch(selectedRuleProvider);
-    final isSelected = selected == rule;
+    final isSelected = !multiSelectMode && selected == rule;
 
     final titleStyle = theme.textTheme.bodyMedium?.copyWith(
       fontWeight: FontWeight.w600,
@@ -45,21 +72,28 @@ class RuleListTile extends ConsumerWidget {
     );
     final subtitleStyle = theme.textTheme.bodySmall;
 
+    final highlight = multiSelectMode && isChecked;
+
     return Material(
-      color: isSelected
+      color: (isSelected || highlight)
           ? theme.colorScheme.primary.withValues(alpha: 0.15)
           : Colors.transparent,
       child: InkWell(
         onTap: () {
+          if (multiSelectMode) {
+            onCheckedChanged?.call(!isChecked);
+            return;
+          }
           ref.read(selectedRuleProvider.notifier).state = rule;
         },
+        onLongPress: onLongPress,
         onSecondaryTapUp:
             onSecondaryTap != null ? (_) => onSecondaryTap!() : null,
         child: Container(
           decoration: BoxDecoration(
             border: Border(
               left: BorderSide(
-                color: isSelected
+                color: (isSelected || highlight)
                     ? theme.colorScheme.primary
                     : Colors.transparent,
                 width: 3,
@@ -74,6 +108,19 @@ class RuleListTile extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              if (multiSelectMode) ...[
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: Checkbox(
+                    value: isChecked,
+                    onChanged: onCheckedChanged == null
+                        ? null
+                        : (v) => onCheckedChanged!(v ?? false),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               _StatusDot(color: statusColor, tooltip: statusTooltip),
               const SizedBox(width: 10),
               Expanded(
@@ -95,12 +142,9 @@ class RuleListTile extends ConsumerWidget {
                     ),
                     if (trailingHint != null) ...[
                       const SizedBox(height: 4),
-                      Text(
-                        trailingHint!,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.primary,
-                          fontStyle: FontStyle.italic,
-                        ),
+                      _TrailingHint(
+                        label: trailingHint!,
+                        onPressed: onTrailingHintPressed,
                       ),
                     ],
                   ],
@@ -108,7 +152,51 @@ class RuleListTile extends ConsumerWidget {
               ),
               const SizedBox(width: 8),
               _SourceBadge(source: sourceBadge),
+              if (trailingWidget != null) ...[
+                const SizedBox(width: 8),
+                trailingWidget!,
+              ],
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrailingHint extends StatelessWidget {
+  final String label;
+  final VoidCallback? onPressed;
+
+  const _TrailingHint({required this.label, this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.labelSmall?.copyWith(
+      color: theme.colorScheme.primary,
+      fontStyle: FontStyle.italic,
+      decoration: onPressed != null ? TextDecoration.underline : null,
+      decorationColor: theme.colorScheme.primary,
+    );
+
+    final text = Text(label, style: style);
+
+    if (onPressed == null) return text;
+
+    // Wrap in a MouseRegion + InkWell so the hint feels like a link and
+    // its tap is consumed before the parent list tile's onTap (which would
+    // otherwise just select the rule).
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(2),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+            child: text,
           ),
         ),
       ),

@@ -75,6 +75,7 @@ class BridgeFfi {
   late final _AddAppDart _addApplication;
   late final _PtrStrDart _applyExclusion;
   late final _PtrStrDart _clearExclusion;
+  late final _PtrStrDart _deleteProfile;
   late final _ScanRulesDart _scanExclusionRules;
 
   // Backup
@@ -149,6 +150,8 @@ class BridgeFfi {
         _lib.lookupFunction<_PtrStrC, _PtrStrDart>('bridge_apply_exclusion');
     _clearExclusion =
         _lib.lookupFunction<_PtrStrC, _PtrStrDart>('bridge_clear_exclusion');
+    _deleteProfile =
+        _lib.lookupFunction<_PtrStrC, _PtrStrDart>('bridge_delete_profile');
     _scanExclusionRules =
         _lib.lookupFunction<_ScanRulesC, _ScanRulesDart>(
             'bridge_scan_exclusion_rules');
@@ -245,6 +248,15 @@ class BridgeFfi {
     final namePtr = appName.toNativeUtf8();
     try {
       return _readJson(_clearExclusion(namePtr));
+    } finally {
+      malloc.free(namePtr);
+    }
+  }
+
+  String? deleteProfile(String profileName) {
+    final namePtr = profileName.toNativeUtf8();
+    try {
+      return _readJson(_deleteProfile(namePtr));
     } finally {
       malloc.free(namePtr);
     }
