@@ -7,6 +7,7 @@ const _dbVersion = 1;
 
 class DatabaseService {
   Database? _db;
+  String? _path;
 
   Database get db {
     final database = _db;
@@ -18,6 +19,11 @@ class DatabaseService {
 
   bool get isInitialized => _db != null;
 
+  /// Absolute path to the on-disk database file. Null until [initialize]
+  /// has been called at least once. Useful for the Reset Database flow
+  /// in Settings, which has to delete the file from outside this class.
+  String? get path => _path;
+
   Future<void> initialize() async {
     if (_db != null) return;
 
@@ -26,6 +32,7 @@ class DatabaseService {
 
     final appDir = await getApplicationSupportDirectory();
     final dbPath = p.join(appDir.path, _dbFileName);
+    _path = dbPath;
 
     _db = await databaseFactoryFfi.openDatabase(
       dbPath,

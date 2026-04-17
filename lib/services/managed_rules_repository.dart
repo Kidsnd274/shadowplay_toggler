@@ -8,9 +8,12 @@ class ManagedRulesRepository {
   ManagedRulesRepository(this._dbService);
 
   Future<List<ManagedRule>> getAllRules() async {
+    // Stable alphabetical order by exe name, then full path as a tiebreaker.
+    // Toggling `intended_value` / `updated_at` must NOT reorder the list
+    // because reordering on every flip is disorienting in the UI.
     final maps = await _dbService.db.query(
       'managed_rules',
-      orderBy: 'updated_at DESC',
+      orderBy: 'LOWER(exe_name) ASC, LOWER(exe_path) ASC',
     );
     return maps.map(ManagedRule.fromMap).toList();
   }

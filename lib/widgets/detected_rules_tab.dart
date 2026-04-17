@@ -29,9 +29,10 @@ class DetectedRulesTab extends ConsumerWidget {
       return const _NoDetectedState();
     }
 
+    final theme = Theme.of(context);
+
     return Column(
       children: [
-        const AdoptAllButton(),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -54,6 +55,19 @@ class DetectedRulesTab extends ConsumerWidget {
               );
             },
           ),
+        ),
+        // Pin "Adopt All" to the bottom-right of the left pane so it sits
+        // out of the way and doesn't shove the rules list down on every
+        // scan.
+        Container(
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: theme.dividerTheme.color ?? Colors.transparent,
+              ),
+            ),
+          ),
+          child: const AdoptAllButton(),
         ),
       ],
     );

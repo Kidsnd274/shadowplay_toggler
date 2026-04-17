@@ -111,8 +111,18 @@ class ScanService {
     // Key by (lowercased exePath, profileName) for matching. NVAPI exe paths
     // are case-insensitive on Windows, which is what we are dealing with.
     final managedByKey = <String, ManagedRule>{};
+    // Secondary index by (basename, profileName). NVIDIA's predefined
+    // profiles often ship with a bare basename attachment (e.g. the
+    // "Fear The Night" profile has `moonlight.exe` attached). When the
+    // user later runs Add Program with the full path
+    // `L:\Apps\Moonlight\moonlight.exe`, the driver ends up with two
+    // executable rows under the same profile — one bare-name (NVIDIA's),
+    // one full-path (ours). They represent the same physical exe and we
+    // must not show the bare-name one as a separate "external" rule.
+    final managedBasenameKeys = <String>{};
     for (final rule in managed) {
       managedByKey[_key(rule.exePath, rule.profileName)] = rule;
+      managedBasenameKeys.add(_basenameKey(rule.exePath, rule.profileName));
     }
 
     final detected = <ExclusionRule>[];
@@ -158,6 +168,14 @@ class ScanService {
         continue;
       }
 
+      // No exact-path match. Before banishing this row to the Detected
+      // tab, check if a managed rule under the same profile already
+      // covers the same exe by basename — in which case this is a
+      // duplicate driver entry and we hide it.
+      if (managedBasenameKeys.contains(_basenameKey(s.appExePath, s.profileName))) {
+        continue;
+      }
+
       if (s.isCurrentPredefined) {
         defaults.add(s.toExclusionRule(sourceType: 'nvidia_default'));
       } else {
@@ -184,6 +202,13 @@ class ScanService {
       ));
     }
 
+    // Stable alphabetical order by exe name, then by profile name. The
+    // UI relies on this so toggling state never reorders the list.
+    detected.sort(_byExeThenProfile);
+    defaults.sort(_byExeThenProfile);
+    drifted.sort(_byExeThenProfile);
+    orphans.sort(_byExeThenProfile);
+
     return _ClassificationBuckets(
       detected: detected,
       defaults: defaults,
@@ -195,6 +220,23 @@ class ScanService {
 
   String _key(String exePath, String profileName) =>
       '${exePath.toLowerCase()}|$profileName';
+
+  /// Strips the directory portion off `exePath` and lowercases for
+  /// case-insensitive matching against another rule on the same profile.
+  String _basenameKey(String exePath, String profileName) {
+    final cleaned = exePath.replaceAll('\\', '/');
+    final slash = cleaned.lastIndexOf('/');
+    final basename =
+        slash == -1 ? cleaned : cleaned.substring(slash + 1);
+    return '${basename.toLowerCase()}|$profileName';
+  }
+
+  int _byExeThenProfile(ExclusionRule a, ExclusionRule b) {
+    final byName =
+        a.exeName.toLowerCase().compareTo(b.exeName.toLowerCase());
+    if (byName != 0) return byName;
+    return a.profileName.toLowerCase().compareTo(b.profileName.toLowerCase());
+  }
 
   int _elapsedMs(DateTime started) =>
       DateTime.now().difference(started).inMilliseconds;

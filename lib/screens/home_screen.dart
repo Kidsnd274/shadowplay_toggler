@@ -8,6 +8,7 @@ import '../providers/nvapi_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/reconciliation_provider.dart';
 import '../providers/scan_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/notification_service.dart';
 import '../widgets/add_program_dialog.dart';
 import '../widgets/app_toolbar.dart';
@@ -17,6 +18,7 @@ import '../widgets/left_pane.dart';
 import '../widgets/reconciliation_banner.dart';
 import '../widgets/right_pane.dart';
 import '../widgets/scan_controller.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -27,6 +29,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _reconciliationStarted = false;
+  bool _autoScanTriggered = false;
 
   @override
   void initState() {
@@ -103,14 +106,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ref.read(isReconcilingProvider.notifier).state = false;
       }
     }
+
+    await _maybeAutoScanOnLaunch();
   }
 
-  void _showNotImplemented(String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$feature — not implemented yet'),
-        duration: const Duration(seconds: 2),
-      ),
+  /// If the user has enabled "Auto-scan on launch", run a full scan once
+  /// reconciliation has settled. Guarded by [_autoScanTriggered] so we
+  /// never fire this twice per session — even if reconciliation is rerun.
+  Future<void> _maybeAutoScanOnLaunch() async {
+    if (_autoScanTriggered) return;
+    _autoScanTriggered = true;
+
+    final enabled =
+        await ref.read(autoScanOnLaunchProvider.future).catchError((_) => false);
+    if (!enabled) return;
+    if (!mounted) return;
+    if (!_assertNvapiReady()) return;
+    await runScan(context, ref);
+  }
+
+  void _onSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
     );
   }
 
@@ -169,7 +186,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               onScanProfiles: _onScanProfiles,
               onAddProgram: _onAddProgram,
               onBackup: _onBackup,
-              onSettings: () => _showNotImplemented('Settings'),
+              onSettings: _onSettings,
             ),
             if (nvapiState is NvapiError)
               _NvapiBanner(message: nvapiState.message),
@@ -177,6 +194,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             const ScanProgressBar(),
             Expanded(
               child: Row(
+                // Stretch both panes to the full available height so the
+                // right pane's content pins to the top of the pane rather
+                // than centering vertically when its intrinsic height is
+                // shorter than the row.
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Flexible(
                     flex: 1,

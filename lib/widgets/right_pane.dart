@@ -53,9 +53,14 @@ class _EmptyDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
+    // Pinned to the top with comfortable breathing room. The user's mental
+    // model is "the detail pane reads top-down", so anchoring the empty
+    // hint at the top matches the loaded state's layout.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 96, 24, 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Icon(
             Icons.touch_app_outlined,
