@@ -10,6 +10,7 @@ import 'providers/database_provider.dart';
 import 'providers/nvapi_provider.dart';
 import 'services/log_buffer.dart';
 import 'services/notification_service.dart';
+import 'widgets/error_boundary.dart';
 
 // The lifecycle listener registers itself with WidgetsBinding.instance in its
 // constructor, but we also retain the reference here so the cleanup intent is
@@ -40,6 +41,10 @@ void main() {
 
 Future<void> _bootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Install the fallback ErrorWidget once, before any frame is built, so
+  // subtree build failures never surface Flutter's red default widget.
+  ErrorBoundary.installErrorBoundaryFallback();
 
   _installLogTeeHandlers();
   _installGlobalErrorHandlers();
@@ -84,7 +89,8 @@ void _installLogTeeHandlers() {
 /// Install top-level handlers for framework errors and unhandled async
 /// errors. In release builds these surface as a user-friendly snackbar via
 /// [NotificationService]; in debug builds they still dump to the console
-/// via Flutter's default presenters.
+/// via Flutter's default presenters (red screen) and we skip the snackbar
+/// so the developer sees only the single authoritative error surface.
 void _installGlobalErrorHandlers() {
   final defaultOnError = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails details) {
@@ -94,14 +100,14 @@ void _installGlobalErrorHandlers() {
     }
     if (kDebugMode) {
       defaultOnError?.call(details);
-    } else {
-      developer.log(
-        details.exceptionAsString(),
-        name: 'shadowplay_toggler',
-        error: details.exception,
-        stackTrace: details.stack,
-      );
+      return;
     }
+    developer.log(
+      details.exceptionAsString(),
+      name: 'shadowplay_toggler',
+      error: details.exception,
+      stackTrace: details.stack,
+    );
     NotificationService.showError(
       'An unexpected error occurred.',
       details: details.exceptionAsString(),
@@ -117,10 +123,12 @@ void _installGlobalErrorHandlers() {
       error: error,
       stackTrace: stack,
     );
-    NotificationService.showError(
-      'An unexpected error occurred.',
-      details: '$error',
-    );
+    if (!kDebugMode) {
+      NotificationService.showError(
+        'An unexpected error occurred.',
+        details: '$error',
+      );
+    }
     return true;
   };
 }

@@ -31,6 +31,12 @@ class ProfileExclusionStateNotifier
   /// on demand from [refreshExe] / [refreshAll] only.
   final NvapiService Function() _nvapiResolver;
 
+  /// Monotonic counter bumped on every [refreshAll] entry. A worker
+  /// whose value no longer matches [_refreshAllGeneration] at the end
+  /// of its loop knows it has been superseded by a newer call and
+  /// bails instead of publishing stale data. See plan F-12.
+  int _refreshAllGeneration = 0;
+
   ProfileExclusionStateNotifier(this._nvapiResolver) : super(const {});
 
   NvapiService get _nvapi => _nvapiResolver();
@@ -85,11 +91,23 @@ class ProfileExclusionStateNotifier
   /// Live-query every exe in [rules], one round-trip each. Used as the
   /// fallback when no scan is available (e.g. immediately after Adopt
   /// inserts a row outside of a scan context).
+  ///
+  /// Two concurrent callers are safe: each bumps [_refreshAllGeneration]
+  /// before starting, and the older call drops its half-built results
+  /// on the floor if the newer call has already overwritten the
+  /// generation. Without this, a slow "refresh a hundred rules" that
+  /// started at T0 would clobber the snapshot a faster "refresh one
+  /// rule" produced at T1>T0 when the slow one eventually completed
+  /// (plan F-12).
   Future<void> refreshAll(Iterable<ManagedRule> rules) async {
+    final myGen = ++_refreshAllGeneration;
     final next = Map<String, bool?>.from(state);
     for (final rule in rules) {
-      next[rule.exePath] = await _queryLive(rule.exePath);
+      final live = await _queryLive(rule.exePath);
+      if (_refreshAllGeneration != myGen) return;
+      next[rule.exePath] = live;
     }
+    if (_refreshAllGeneration != myGen) return;
     state = Map.unmodifiable(next);
   }
 
@@ -100,14 +118,14 @@ class ProfileExclusionStateNotifier
   Future<bool?> _queryLive(String exePath) async {
     if (exePath.isEmpty) return null;
     try {
-      final found = _nvapi.findApplication(exePath);
+      final found = await _nvapi.findApplication(exePath);
       if (found == null) return null;
       final attached = (found['found'] as bool?) ?? false;
       if (!attached) return null;
       final profileName = (found['profileName'] as String?) ?? '';
       if (profileName.isEmpty) return null;
 
-      final profiles = _nvapi.getAllProfiles();
+      final profiles = await _nvapi.getAllProfiles();
       int? profileIndex;
       for (final p in profiles) {
         if (p.name == profileName) {
@@ -117,8 +135,10 @@ class ProfileExclusionStateNotifier
       }
       if (profileIndex == null) return null;
 
-      final setting =
-          _nvapi.getSetting(profileIndex, AppConstants.captureSettingId);
+      final setting = await _nvapi.getSetting(
+        profileIndex,
+        AppConstants.captureSettingId,
+      );
       if (setting == null) return false;
       final value = _parseSettingValue(setting['currentValue']);
       if (value == null) return false;

@@ -25,6 +25,20 @@ class AppToolbar extends ConsumerWidget {
     final isScanning = ref.watch(isScanningProvider);
     final isReconciling = ref.watch(isReconcilingProvider);
     final lastScanAt = ref.watch(lastScanAtProvider);
+    // Any NVAPI-touching action must be disabled while a scan or the
+    // startup reconciliation pass is running. See [bridgeBusyProvider].
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
+    // Plan F-45: surface the keyboard shortcuts registered in HomeScreen
+    // inside each button's tooltip so the shortcuts are discoverable.
+    final scanTooltip = isScanning
+        ? 'Scan already in progress'
+        : isReconciling
+            ? 'Waiting for startup reconciliation to finish'
+            : 'Scan every DRS profile for capture-exclusion state '
+                '(Ctrl+Shift+S)';
+    final busyTooltip = isScanning
+        ? 'Wait for the current scan to finish'
+        : 'Waiting for startup reconciliation to finish';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -79,28 +93,41 @@ class AppToolbar extends ConsumerWidget {
             ),
             const SizedBox(width: 12),
           ],
-          OutlinedButton.icon(
-            onPressed: isScanning ? null : onScanProfiles,
-            icon: isScanning
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.radar, size: 18),
-            label: Text(isScanning ? 'Scanning…' : 'Scan Profiles'),
+          Tooltip(
+            message: scanTooltip,
+            child: OutlinedButton.icon(
+              onPressed: bridgeBusy ? null : onScanProfiles,
+              icon: isScanning
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.radar, size: 18),
+              label: Text(isScanning ? 'Scanning…' : 'Scan Profiles'),
+            ),
           ),
           const SizedBox(width: 8),
-          ElevatedButton.icon(
-            onPressed: onAddProgram,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('Add Program'),
+          Tooltip(
+            message: bridgeBusy
+                ? busyTooltip
+                : 'Add a new program exclusion (Ctrl+N)',
+            child: ElevatedButton.icon(
+              onPressed: bridgeBusy ? null : onAddProgram,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Program'),
+            ),
           ),
           const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: onBackup,
-            icon: const Icon(Icons.save_outlined, size: 18),
-            label: const Text('Backup'),
+          Tooltip(
+            message: bridgeBusy
+                ? busyTooltip
+                : 'Backup / restore NVIDIA DRS settings (Ctrl+B)',
+            child: OutlinedButton.icon(
+              onPressed: bridgeBusy ? null : onBackup,
+              icon: const Icon(Icons.save_outlined, size: 18),
+              label: const Text('Backup'),
+            ),
           ),
           const SizedBox(width: 8),
           IconButton(

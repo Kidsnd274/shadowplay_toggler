@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 
 import '../models/nvapi_state.dart';
 import '../providers/nvapi_provider.dart';
+import '../providers/reconciliation_provider.dart';
+import '../services/notification_service.dart';
 import 'add_program_dialog.dart';
 
 /// Wraps [child] in a `DropTarget` that accepts dropped `.exe` files and
@@ -20,6 +22,16 @@ import 'add_program_dialog.dart';
 ///   * While a drag is hovering over the window, a translucent overlay
 ///     gives the user clear visual confirmation that the drop will be
 ///     accepted.
+///
+/// Note (plan F-48): the filter is purely extension-based. A file
+/// renamed to `game.exe` that isn't actually a PE binary would still
+/// pass this gate — validation happens downstream when
+/// [runAddProgramFlow] hands the path to NVAPI. That's considered
+/// acceptable for a desktop utility: NVAPI will simply fail to attach
+/// a non-executable to a DRS profile and we surface the error. We
+/// intentionally don't MIME-sniff / read the PE header here because
+/// `.exe` is the de-facto signal on Windows and deeper validation
+/// would regress drag-from-Explorer responsiveness.
 class ExeDropTarget extends ConsumerStatefulWidget {
   const ExeDropTarget({super.key, required this.child});
 
@@ -58,33 +70,25 @@ class _ExeDropTargetState extends ConsumerState<ExeDropTarget> {
       }
     }
 
-    final messenger = ScaffoldMessenger.maybeOf(context);
-
     if (exePaths.isEmpty) {
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(
-            rejected.isEmpty
-                ? 'Nothing to add — drop a .exe file.'
-                : 'Only .exe files are supported. '
-                    'Ignored: ${rejected.join(', ')}',
-          ),
-        ),
+      NotificationService.showWarning(
+        rejected.isEmpty
+            ? 'Nothing to add — drop a .exe file.'
+            : 'Only .exe files are supported. Ignored: ${rejected.join(', ')}',
+        context: context,
       );
       return;
     }
 
     if (rejected.isNotEmpty) {
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Ignored non-.exe items: ${rejected.join(', ')}',
-          ),
-        ),
+      NotificationService.showInfo(
+        'Ignored non-.exe items: ${rejected.join(', ')}',
+        context: context,
       );
     }
 
     if (!_assertNvapiReady()) return;
+    if (!_assertBridgeFree()) return;
 
     _isProcessing = true;
     try {
@@ -97,14 +101,11 @@ class _ExeDropTargetState extends ConsumerState<ExeDropTarget> {
         );
         if (!mounted) break;
         if (result != null && result.success) {
-          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            SnackBar(
-              content: Text(
-                result.exclusionAlreadyApplied
-                    ? 'Exclusion already applied for ${result.exeName}.'
-                    : 'Added exclusion for ${result.exeName}.',
-              ),
-            ),
+          NotificationService.showSuccess(
+            result.exclusionAlreadyApplied
+                ? 'Exclusion already applied for ${result.exeName}.'
+                : 'Added exclusion for ${result.exeName}.',
+            context: context,
           );
         }
       }
@@ -122,9 +123,19 @@ class _ExeDropTargetState extends ConsumerState<ExeDropTarget> {
       NvapiError(message: final m) => 'NVAPI unavailable: $m',
       _ => 'NVAPI is not ready yet.',
     };
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    NotificationService.showWarning(message, context: context);
+    return false;
+  }
+
+  /// Refuse drops while a scan or startup reconciliation is running —
+  /// the bridge DLL session is single-writer. See plan F-16.
+  bool _assertBridgeFree() {
+    if (!ref.read(bridgeBusyProvider)) return true;
+    final reconciling = ref.read(isReconcilingProvider);
+    final msg = reconciling
+        ? 'Startup reconciliation is still running — try again in a moment.'
+        : 'A scan is in progress — try again in a moment.';
+    NotificationService.showInfo(msg, context: context);
     return false;
   }
 

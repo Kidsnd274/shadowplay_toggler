@@ -25,6 +25,27 @@ class AppStateRepository {
     );
   }
 
+  /// Atomically persist multiple key/value pairs. Used by reconciliation
+  /// to guarantee that `drsProfileHash` and `lastReconcileAt` land
+  /// together — without the transaction, a crash between the two
+  /// writes could leave the hash updated but the "last reconciled at"
+  /// stamp pointing to the previous run, making every subsequent
+  /// startup misdiagnose a DRS reset (plan F-22).
+  Future<void> setValues(Map<String, String> pairs) async {
+    if (pairs.isEmpty) return;
+    await _dbService.db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final entry in pairs.entries) {
+        batch.insert(
+          'app_state',
+          {'key': entry.key, 'value': entry.value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
   Future<bool> getBool(String key) async {
     final value = await getValue(key);
     return value == 'true';

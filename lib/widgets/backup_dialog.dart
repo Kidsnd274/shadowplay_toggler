@@ -10,6 +10,7 @@ import '../models/rules_export.dart';
 import '../providers/backup_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/rules_export_provider.dart';
 import '../services/backup_service.dart';
 import '../services/notification_service.dart';
@@ -26,6 +27,21 @@ Future<void> showBackupDialog(BuildContext context) async {
     context: context,
     builder: (_) => const _BackupDialog(),
   );
+}
+
+/// Shared backstop for every backup/restore/delete action. The dialog's
+/// buttons already grey out via [bridgeBusyProvider], but guard racy
+/// paths (keyboard, dialog pre-select) from entering the shared bridge
+/// session while a scan or startup reconciliation is running. See plan
+/// F-16.
+bool _assertBridgeFree(BuildContext context, WidgetRef ref) {
+  if (!ref.read(bridgeBusyProvider)) return true;
+  final reconciling = ref.read(isReconcilingProvider);
+  final msg = reconciling
+      ? 'Startup reconciliation is still running — try again in a moment.'
+      : 'A scan is in progress — try again in a moment.';
+  NotificationService.showInfo(msg, context: context);
+  return false;
 }
 
 /// Called by the Add Program flow before its first driver write.
@@ -46,6 +62,7 @@ Future<bool> offerFirstBackupIfNeeded(
   final already = await appState.getBool(kFirstBackupDoneKey);
   if (already) return true;
   if (!context.mounted) return false;
+  if (!_assertBridgeFree(context, ref)) return false;
 
   final choice = await showDialog<_FirstBackupDecision>(
     context: context,
@@ -61,14 +78,14 @@ Future<bool> offerFirstBackupIfNeeded(
             await ref.read(backupServiceProvider).createBackup();
         await ref.read(backupListProvider.notifier).refresh();
         if (context.mounted) {
-          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            SnackBar(content: Text('Backup saved to ${p.basename(path)}')),
+          NotificationService.showSuccess(
+            'Backup saved to ${p.basename(path)}',
+            context: context,
           );
         }
       } on BackupServiceException catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.maybeOf(context)
-              ?.showSnackBar(SnackBar(content: Text(e.message)));
+          NotificationService.showError(e.message, context: context);
         }
         return false;
       } finally {
@@ -96,12 +113,19 @@ class _BackupDialog extends ConsumerWidget {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 680),
+      // Fixed-size SizedBox (capped by MediaQuery if the window is
+      // shorter than 680px) gives the dialog a stable footprint so it
+      // doesn't grow/shrink every time an async section finishes
+      // loading. Combined with Expanded below, the scroll view always
+      // fills the remaining vertical space instead of fighting a
+      // Flexible + SingleChildScrollView intrinsic-size measurement.
+      // Plan F-31.
+      child: SizedBox(
+        width: 640,
+        height: _dialogHeight(context),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
@@ -120,7 +144,7 @@ class _BackupDialog extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Flexible(
+              Expanded(
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -142,6 +166,15 @@ class _BackupDialog extends ConsumerWidget {
       ),
     );
   }
+
+  /// 680px on tall windows, less on short ones (with a 48px margin to
+  /// match [Dialog.insetPadding]). Prevents overflow on laptop
+  /// displays where the default 680 would push the dialog off-screen.
+  double _dialogHeight(BuildContext context) {
+    const preferred = 680.0;
+    final available = MediaQuery.of(context).size.height - 48;
+    return available < preferred ? available : preferred;
+  }
 }
 
 class _CreateBackupSection extends ConsumerWidget {
@@ -151,6 +184,8 @@ class _CreateBackupSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final busy = ref.watch(isBackingUpProvider);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
+    final locked = busy || bridgeBusy;
 
     return _SectionCard(
       title: 'Create backup',
@@ -169,13 +204,13 @@ class _CreateBackupSection extends ConsumerWidget {
             runSpacing: 8,
             children: [
               ElevatedButton.icon(
-                onPressed: busy ? null : () => _runCreate(context, ref),
+                onPressed: locked ? null : () => _runCreate(context, ref),
                 icon: const Icon(Icons.save, size: 16),
                 label: const Text('Create Backup'),
               ),
               OutlinedButton.icon(
                 onPressed:
-                    busy ? null : () => _runCreateCustom(context, ref),
+                    locked ? null : () => _runCreateCustom(context, ref),
                 icon: const Icon(Icons.folder_open, size: 16),
                 label: const Text('Save to…'),
               ),
@@ -187,12 +222,16 @@ class _CreateBackupSection extends ConsumerWidget {
   }
 
   Future<void> _runCreate(BuildContext context, WidgetRef ref) async {
+    if (!_assertBridgeFree(context, ref)) return;
     await _performCreate(context, ref, customPath: null);
   }
 
   Future<void> _runCreateCustom(BuildContext context, WidgetRef ref) async {
-    final suggestedName =
-        p.basename(ref.read(backupServiceProvider).defaultBackupDirectory());
+    if (!_assertBridgeFree(context, ref)) return;
+    final suggestedName = p.basename(
+      await ref.read(backupServiceProvider).defaultBackupDirectory(),
+    );
+    if (!context.mounted) return;
     final path = await FilePicker.saveFile(
       dialogTitle: 'Save backup',
       fileName: 'drs_backup_${_timestamp()}.nvidiaProfileInspector',
@@ -210,20 +249,23 @@ class _CreateBackupSection extends ConsumerWidget {
     required String? customPath,
   }) async {
     ref.read(isBackingUpProvider.notifier).state = true;
-    final messenger = ScaffoldMessenger.maybeOf(context);
     try {
       final service = ref.read(backupServiceProvider);
       final path = await service.createBackup(customPath: customPath);
       if (customPath == null) {
         await ref.read(backupListProvider.notifier).refresh();
       }
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Backup saved to ${p.basename(path)}')),
+      if (!context.mounted) return;
+      NotificationService.showSuccess(
+        'Backup saved to ${p.basename(path)}',
+        context: context,
       );
     } on BackupServiceException catch (e) {
-      messenger?.showSnackBar(SnackBar(content: Text(e.message)));
+      if (!context.mounted) return;
+      NotificationService.showError(e.message, context: context);
     } catch (e) {
-      messenger?.showSnackBar(SnackBar(content: Text('Backup failed: $e')));
+      if (!context.mounted) return;
+      NotificationService.showError('Backup failed: $e', context: context);
     } finally {
       ref.read(isBackingUpProvider.notifier).state = false;
     }
@@ -244,6 +286,8 @@ class _RestoreSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final busy = ref.watch(isBackingUpProvider);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
+    final locked = busy || bridgeBusy;
 
     return _SectionCard(
       title: 'Restore from backup',
@@ -280,7 +324,7 @@ class _RestoreSection extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
-            onPressed: busy ? null : () => _pickAndRestore(context, ref),
+            onPressed: locked ? null : () => _pickAndRestore(context, ref),
             icon: const Icon(Icons.restore, size: 16),
             label: const Text('Select Backup File…'),
           ),
@@ -290,6 +334,7 @@ class _RestoreSection extends ConsumerWidget {
   }
 
   Future<void> _pickAndRestore(BuildContext context, WidgetRef ref) async {
+    if (!_assertBridgeFree(context, ref)) return;
     final picked = await FilePicker.pickFiles(
       dialogTitle: 'Select backup file',
       type: FileType.any,
@@ -312,6 +357,7 @@ Future<void> confirmAndRestoreBackup(
   WidgetRef ref,
   String filePath,
 ) async {
+  if (!_assertBridgeFree(context, ref)) return;
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -336,22 +382,23 @@ Future<void> confirmAndRestoreBackup(
   if (confirmed != true || !context.mounted) return;
 
   ref.read(isBackingUpProvider.notifier).state = true;
-  final messenger = ScaffoldMessenger.maybeOf(context);
   final service = ref.read(backupServiceProvider);
   try {
     final autoBackupPath = await service.createBackup();
     await service.restoreBackup(filePath);
     await ref.read(backupListProvider.notifier).refresh();
-    messenger?.showSnackBar(SnackBar(
-      content: Text(
-        'Restored from ${p.basename(filePath)}. '
-        'Pre-restore backup: ${p.basename(autoBackupPath)}.',
-      ),
-    ));
+    if (!context.mounted) return;
+    NotificationService.showSuccess(
+      'Restored from ${p.basename(filePath)}. '
+      'Pre-restore backup: ${p.basename(autoBackupPath)}.',
+      context: context,
+    );
   } on BackupServiceException catch (e) {
-    messenger?.showSnackBar(SnackBar(content: Text(e.message)));
+    if (!context.mounted) return;
+    NotificationService.showError(e.message, context: context);
   } catch (e) {
-    messenger?.showSnackBar(SnackBar(content: Text('Restore failed: $e')));
+    if (!context.mounted) return;
+    NotificationService.showError('Restore failed: $e', context: context);
   } finally {
     ref.read(isBackingUpProvider.notifier).state = false;
   }
@@ -394,8 +441,8 @@ class _PreviousBackupsSection extends ConsumerWidget {
               Row(
                 children: [
                   TextButton.icon(
-                    onPressed: () {
-                      final dir = ref
+                    onPressed: () async {
+                      final dir = await ref
                           .read(backupServiceProvider)
                           .defaultBackupDirectory();
                       if (dir.isEmpty) return;
@@ -429,6 +476,8 @@ class _BackupRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final busy = ref.watch(isBackingUpProvider);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
+    final restoreLocked = busy || bridgeBusy;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -455,7 +504,7 @@ class _BackupRow extends ConsumerWidget {
           ),
           IconButton(
             tooltip: 'Restore this backup',
-            onPressed: busy
+            onPressed: restoreLocked
                 ? null
                 : () => confirmAndRestoreBackup(context, ref, info.filePath),
             icon: const Icon(Icons.restore, size: 18),
@@ -505,8 +554,10 @@ class _RulesExportImportSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final busy = ref.watch(isExportingOrImportingRulesProvider);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     final rulesAsync = ref.watch(managedRulesProvider);
     final count = rulesAsync.valueOrNull?.length ?? 0;
+    final importLocked = busy || bridgeBusy;
 
     return _SectionCard(
       title: 'Export / import managed profiles',
@@ -541,7 +592,7 @@ class _RulesExportImportSection extends ConsumerWidget {
               ),
               OutlinedButton.icon(
                 onPressed:
-                    busy ? null : () => _runImport(context, ref),
+                    importLocked ? null : () => _runImport(context, ref),
                 icon: const Icon(Icons.file_upload_outlined, size: 16),
                 label: const Text('Import from JSON…'),
               ),
@@ -591,6 +642,7 @@ class _RulesExportImportSection extends ConsumerWidget {
   }
 
   Future<void> _runImport(BuildContext context, WidgetRef ref) async {
+    if (!_assertBridgeFree(context, ref)) return;
     final picked = await FilePicker.pickFiles(
       dialogTitle: 'Select managed-rules JSON',
       type: FileType.custom,

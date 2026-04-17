@@ -32,6 +32,12 @@ class LogBuffer {
   final List<LogEntry> _entries = <LogEntry>[];
   final StreamController<LogEntry> _controller =
       StreamController<LogEntry>.broadcast();
+  // Separate stream for clears so listeners can drop their cached
+  // list without mistaking a clear for a fresh append (plan F-26).
+  // Using `void` here deliberately: the listener only needs to know
+  // *that* it happened, not what was cleared.
+  final StreamController<void> _clearController =
+      StreamController<void>.broadcast();
 
   void add(LogLevel level, String message) {
     if (message.isEmpty) return;
@@ -65,7 +71,15 @@ class LogBuffer {
 
   Stream<LogEntry> get stream => _controller.stream;
 
+  /// Fires whenever [clear] is called. Subscribers should reset their
+  /// cached view of the buffer on each event.
+  Stream<void> get clears => _clearController.stream;
+
   void clear() {
     _entries.clear();
+    // Emit *after* the mutation so any synchronous subscriber that
+    // calls [snapshot] in response gets the empty list, not whatever
+    // was there a microsecond ago (plan F-26).
+    _clearController.add(null);
   }
 }

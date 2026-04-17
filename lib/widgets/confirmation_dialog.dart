@@ -31,6 +31,14 @@ class ConfirmationDialog extends StatelessWidget {
   }) async {
     final result = await showDialog<bool>(
       context: context,
+      // Plan F-47: destructive confirmations (Reset DB, Delete
+      // Profile, batch ops) should never be dismissable by a stray
+      // click outside the dialog or an accidental Esc — that path
+      // returns `null`, which `ConfirmationDialog.show` squashes to
+      // `false`, making it *look* like an explicit cancel. For
+      // non-destructive prompts, barrier dismiss remains a
+      // convenience.
+      barrierDismissible: !destructive,
       builder: (_) => ConfirmationDialog(
         title: title,
         message: message,

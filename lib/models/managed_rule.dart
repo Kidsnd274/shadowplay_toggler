@@ -57,6 +57,14 @@ class ManagedRule {
     };
   }
 
+  /// Plan F-36: this `copyWith` cannot express "clear `previousValue`
+  /// / `driverVersion` / `id`" — passing `null` for those parameters
+  /// is indistinguishable from "don't change it". No caller today
+  /// needs that, but anyone reaching for it should switch to a
+  /// sentinel (e.g. `const _unset = Object();`) rather than shoe-
+  /// horning it through `null`. The model instead exposes direct
+  /// construction via the main constructor for the rare cases that
+  /// need to rebuild the whole record.
   ManagedRule copyWith({
     int? id,
     String? exePath,

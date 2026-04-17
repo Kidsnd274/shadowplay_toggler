@@ -46,7 +46,7 @@ class AdoptRuleService {
     // for live state; it's just a starting hint.
     Map<String, dynamic>? findResponse;
     try {
-      findResponse = _nvapi.findApplication(detected.exePath);
+      findResponse = await _nvapi.findApplication(detected.exePath);
     } on NvapiException catch (e) {
       return AdoptResult.failure('NVAPI error: ${e.message}');
     }
@@ -94,7 +94,7 @@ class AdoptRuleService {
 
     Map<String, dynamic>? response;
     try {
-      response = _nvapi.applyExclusion(detected.exePath);
+      response = await _nvapi.applyExclusion(detected.exePath);
     } on NvapiException catch (e) {
       return AdoptResult.failure(
         'Adopted, but failed to set exclusion: ${e.message}',

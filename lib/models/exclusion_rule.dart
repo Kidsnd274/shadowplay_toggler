@@ -40,6 +40,13 @@ class ExclusionRule {
     );
   }
 
+  /// Plan F-36: same limitation as `ManagedRule.copyWith` — passing
+  /// `null` for any nullable field here (`previousValue`, `createdAt`,
+  /// `updatedAt`) is interpreted as "leave it alone", not "clear it",
+  /// because the standard `param ?? this.param` pattern cannot
+  /// distinguish "user omitted" from "user wants null". No call site
+  /// currently needs the clearing semantics; if one does, introduce a
+  /// sentinel wrapper or build a fresh instance via the constructor.
   ExclusionRule copyWith({
     String? exePath,
     String? exeName,

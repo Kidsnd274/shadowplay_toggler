@@ -99,7 +99,7 @@ class AddProgramService {
     // which we translate into the "new profile will be created" branch.
     Map<String, dynamic>? findResult;
     try {
-      findResult = _nvapi.findApplication(normalizedPath);
+      findResult = await _nvapi.findApplication(normalizedPath);
     } on NvapiBridgeException catch (e) {
       return AddProgramPreview(
         exePath: normalizedPath,
@@ -158,7 +158,7 @@ class AddProgramService {
 
     Map<String, dynamic>? response;
     try {
-      response = _nvapi.applyExclusion(normalizedPath);
+      response = await _nvapi.applyExclusion(normalizedPath);
     } on NvapiBridgeException catch (e) {
       return AddProgramResult.error(
         exePath: normalizedPath,

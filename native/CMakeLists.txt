@@ -20,6 +20,12 @@ target_include_directories(shadowplay_bridge PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/nvapi_sdk"
 )
 
+# Plan F-43: depend on shell32 explicitly rather than whatever the
+# nvapi import library happens to pull in transitively today. The
+# SHGetFolderPathW call in bridge.cpp lives in shell32, and a future
+# NVAPI SDK that stops pulling shell32 in would break the build in a
+# very confusing way (unresolved external symbol).
 target_link_libraries(shadowplay_bridge PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/nvapi_sdk/amd64/nvapi64.lib"
+  shell32
 )

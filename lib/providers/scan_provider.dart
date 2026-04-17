@@ -4,11 +4,15 @@ import '../models/exclusion_rule.dart';
 import '../models/scan_result.dart';
 import '../services/scan_service.dart';
 import 'database_provider.dart';
+import 'nvapi_service_provider.dart';
 
 /// Singleton [ScanService] — it holds an in-flight future so concurrent
 /// scan requests collapse into one.
 final scanServiceProvider = Provider<ScanService>((ref) {
-  return ScanService(ref.read(managedRulesRepositoryProvider));
+  return ScanService(
+    ref.read(nvapiServiceProvider),
+    ref.read(managedRulesRepositoryProvider),
+  );
 });
 
 /// Whether a scan is currently running. The UI toggles this around the

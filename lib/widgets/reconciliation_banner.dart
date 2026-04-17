@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/reconciliation_result.dart';
 import '../providers/reconciliation_provider.dart';
 import '../providers/selected_tab_provider.dart';
 
@@ -14,13 +15,34 @@ import '../providers/selected_tab_provider.dart';
 /// individual profiles cover the recovery path. A banner is only
 /// warranted when the user needs a heads-up that something *outside*
 /// the app changed underfoot.
-class ReconciliationBanner extends ConsumerWidget {
+class ReconciliationBanner extends ConsumerStatefulWidget {
   const ReconciliationBanner({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReconciliationBanner> createState() =>
+      _ReconciliationBannerState();
+}
+
+class _ReconciliationBannerState extends ConsumerState<ReconciliationBanner> {
+  // Banner dismissal is UI-local state. Storing it on the provider
+  // (the old approach — `state = null` on dismiss) discarded the whole
+  // reconciliation result and fought any other consumer that wanted
+  // to read `drsResetDetected`, `warnings`, `duration`, etc. Plan F-27.
+  bool _dismissed = false;
+  ReconciliationResult? _lastSeen;
+
+  @override
+  Widget build(BuildContext context) {
     final result = ref.watch(lastReconciliationProvider);
-    if (result == null || !result.drsResetDetected) {
+
+    // A new reconciliation run should always resurface the banner —
+    // the previous dismissal was about an older event.
+    if (!identical(result, _lastSeen)) {
+      _lastSeen = result;
+      _dismissed = false;
+    }
+
+    if (result == null || !result.drsResetDetected || _dismissed) {
       return const SizedBox.shrink();
     }
 
@@ -44,11 +66,11 @@ class ReconciliationBanner extends ConsumerWidget {
             ),
           ),
           TextButton(
-            onPressed: () => _goToManaged(ref),
+            onPressed: _goToManaged,
             child: const Text('Open Managed Profiles'),
           ),
           TextButton(
-            onPressed: () => _dismiss(ref),
+            onPressed: _dismiss,
             child: const Text('Dismiss'),
           ),
         ],
@@ -56,12 +78,12 @@ class ReconciliationBanner extends ConsumerWidget {
     );
   }
 
-  void _goToManaged(WidgetRef ref) {
+  void _goToManaged() {
     ref.read(selectedTabProvider.notifier).state = LeftPaneTab.managed;
-    _dismiss(ref);
+    _dismiss();
   }
 
-  void _dismiss(WidgetRef ref) {
-    ref.read(lastReconciliationProvider.notifier).state = null;
+  void _dismiss() {
+    setState(() => _dismissed = true);
   }
 }

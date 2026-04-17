@@ -25,3 +25,16 @@ final isReconcilingProvider = StateProvider<bool>((ref) => false);
 /// state without depending on the reconciliation result staying around.
 final lastReconciliationProvider =
     StateProvider<ReconciliationResult?>((ref) => null);
+
+/// True while any NVAPI-touching background job is running — specifically
+/// a full-DRS scan worker isolate or the startup reconciliation pass. UI
+/// actions that call into the single shared bridge session must gate on
+/// this until a proper dispatcher lands (see plan F-01 / F-15). The DLL's
+/// static error / backup-path buffers are not re-entrant, so allowing
+/// concurrent bridge entry from the main thread while the worker is mid-
+/// scan can corrupt the error channel or the session itself.
+final bridgeBusyProvider = Provider<bool>((ref) {
+  final scanning = ref.watch(isScanningProvider);
+  final reconciling = ref.watch(isReconcilingProvider);
+  return scanning || reconciling;
+});

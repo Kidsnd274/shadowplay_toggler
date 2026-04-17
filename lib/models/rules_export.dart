@@ -102,15 +102,32 @@ class RulesExportEntry {
     );
   }
 
+  /// Parses an `intendedValue` JSON field. Returns the default capture
+  /// value (`0x10000000`) when the field is absent; otherwise throws a
+  /// [FormatException] if the value is present but unparsable.
+  ///
+  /// Plan F-37: the previous behaviour silently returned the default
+  /// for any garbage (e.g. `"banana"`, `true`, `[]`), which meant a
+  /// mistyped export file would quietly flip every rule to the
+  /// "enabled" value instead of failing the import and telling the
+  /// user their file was malformed.
   static int _parseIntendedValue(dynamic v) {
     if (v == null) return 0x10000000;
     if (v is int) return v;
     if (v is String) {
       final cleaned =
           v.startsWith('0x') || v.startsWith('0X') ? v.substring(2) : v;
-      return int.tryParse(cleaned, radix: 16) ?? 0x10000000;
+      final parsed = int.tryParse(cleaned, radix: 16);
+      if (parsed == null) {
+        throw FormatException(
+          'intendedValue "$v" is not a valid 32-bit hex integer.',
+        );
+      }
+      return parsed;
     }
-    return 0x10000000;
+    throw FormatException(
+      'intendedValue must be an int or a hex string, got ${v.runtimeType}.',
+    );
   }
 
   static String _basename(String path) {

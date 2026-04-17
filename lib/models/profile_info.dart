@@ -14,11 +14,21 @@ class ProfileInfo {
   });
 
   factory ProfileInfo.fromJson(Map<String, dynamic> json) {
+    // Parse numeric fields via `num?` then `toInt()` so a JSON value
+    // serialized as `42.0` (perfectly legal per the spec, and how some
+    // C++ JSON libraries emit integers) still lands on the right
+    // field instead of throwing a `TypeError` mid-parse. Plan F-39.
+    int intOr(String key, int fallback) {
+      final v = json[key];
+      if (v is num) return v.toInt();
+      return fallback;
+    }
+
     return ProfileInfo(
       name: json['name'] as String? ?? '',
-      index: json['index'] as int? ?? -1,
-      numApplications: json['numApplications'] as int? ?? 0,
-      numSettings: json['numSettings'] as int? ?? 0,
+      index: intOr('index', -1),
+      numApplications: intOr('numApplications', 0),
+      numSettings: intOr('numSettings', 0),
       isPredefined: json['isPredefined'] as bool? ?? false,
     );
   }

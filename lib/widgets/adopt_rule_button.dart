@@ -5,10 +5,29 @@ import '../models/exclusion_rule.dart';
 import '../providers/adopt_rule_provider.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/multi_select_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
+import '../providers/reconciliation_provider.dart';
+import '../providers/scan_provider.dart';
 import '../providers/selected_rule_provider.dart';
 import '../services/notification_service.dart';
 import 'confirmation_dialog.dart';
+
+/// Backstop check for actions that enter the native bridge. Returns
+/// false and emits a snackbar if a scan or startup reconciliation pass
+/// is running — we must not let a second thread race the shared
+/// session (see plan F-16). Buttons should already gate on
+/// [bridgeBusyProvider] in their `build`, but dialogs/keyboard paths
+/// can still invoke these flows mid-scan, so double-check here.
+bool _assertBridgeFree(BuildContext context, WidgetRef ref) {
+  if (!ref.read(bridgeBusyProvider)) return true;
+  final reconciling = ref.read(isReconcilingProvider);
+  final msg = reconciling
+      ? 'Startup reconciliation is still running — try again in a moment.'
+      : 'A scan is in progress — try again in a moment.';
+  NotificationService.showInfo(msg, context: context);
+  return false;
+}
 
 /// Shared "watch this profile" flow used by [AdoptRuleButton] and by
 /// inline "Adopt" actions in the Detected tab list. Adoption is purely
@@ -24,6 +43,10 @@ Future<bool> adoptRuleInteractive(
   ExclusionRule rule, {
   bool skipConfirmation = false,
 }) async {
+  // Adopt still calls `NvapiService.findApplication` to re-resolve the
+  // live profile name, so gate it like any other bridge-touching flow.
+  if (!_assertBridgeFree(context, ref)) return false;
+
   if (!skipConfirmation) {
     final confirmed = await ConfirmationDialog.show(
       context,
@@ -66,6 +89,8 @@ Future<bool> addExclusionInteractive(
   WidgetRef ref,
   ExclusionRule rule,
 ) async {
+  if (!_assertBridgeFree(context, ref)) return false;
+
   final confirmed = await ConfirmationDialog.show(
     context,
     title: 'Add exclusion for ${rule.exeName}?',
@@ -163,8 +188,9 @@ class _AdoptRuleButtonState extends ConsumerState<AdoptRuleButton> {
 
   @override
   Widget build(BuildContext context) {
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     return OutlinedButton.icon(
-      onPressed: _busy ? null : _onAdopt,
+      onPressed: (_busy || bridgeBusy) ? null : _onAdopt,
       icon: _busy
           ? const SizedBox(
               width: 14,
@@ -277,13 +303,16 @@ class _AdoptInlineButtonState extends ConsumerState<AdoptInlineButton> {
 
   @override
   Widget build(BuildContext context) {
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     return _DetectedRowChip(
       icon: Icons.bookmark_add_outlined,
       label: 'Adopt',
-      tooltip: 'Watch this profile (driver unchanged)',
+      tooltip: bridgeBusy
+          ? 'Wait for the current scan to finish'
+          : 'Watch this profile (driver unchanged)',
       busy: _busy,
       filled: false,
-      onPressed: _onAdopt,
+      onPressed: bridgeBusy ? null : _onAdopt,
     );
   }
 }
@@ -315,13 +344,16 @@ class _AddExclusionInlineButtonState
 
   @override
   Widget build(BuildContext context) {
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     return _DetectedRowChip(
       icon: Icons.visibility_off_outlined,
       label: 'Exclude',
-      tooltip: 'Adopt this profile and turn the exclusion on',
+      tooltip: bridgeBusy
+          ? 'Wait for the current scan to finish'
+          : 'Adopt this profile and turn the exclusion on',
       busy: _busy,
       filled: true,
-      onPressed: _onAdd,
+      onPressed: bridgeBusy ? null : _onAdd,
     );
   }
 }
@@ -340,6 +372,8 @@ class _AdoptAllButtonState extends ConsumerState<AdoptAllButton> {
   bool _busy = false;
 
   Future<void> _onAdoptAll() async {
+    if (!_assertBridgeFree(context, ref)) return;
+
     final rules = ref.read(detectedRulesProvider).rules;
     if (rules.isEmpty) return;
 
@@ -359,8 +393,18 @@ class _AdoptAllButtonState extends ConsumerState<AdoptAllButton> {
       final result = await service.adoptAll(rules);
       if (!mounted) return;
 
-      // Refresh state regardless of individual failures.
+      // Refresh state regardless of individual failures. Every detected
+      // rule either moved into Managed or stayed failed; both outcomes
+      // invalidate the currently-selected rule pointer (it's still an
+      // `external` ExclusionRule), the last scan snapshot (its detected
+      // bucket and managedLiveValues maps are now wrong), and the
+      // reconciliation banner (its numbers referenced the old buckets).
       ref.read(detectedRulesProvider.notifier).clear();
+      ref.read(selectedRuleProvider.notifier).state = null;
+      exitMultiSelect(ref);
+      ref.read(lastScanResultProvider.notifier).state = null;
+      ref.read(lastScanAtProvider.notifier).state = null;
+      ref.read(lastReconciliationProvider.notifier).state = null;
       await ref.read(managedRulesProvider.notifier).refresh();
 
       if (result.failed == 0) {
@@ -386,12 +430,13 @@ class _AdoptAllButtonState extends ConsumerState<AdoptAllButton> {
   Widget build(BuildContext context) {
     final detected = ref.watch(detectedRulesProvider);
     if (detected.rules.isEmpty) return const SizedBox.shrink();
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Align(
         alignment: Alignment.centerRight,
         child: OutlinedButton.icon(
-          onPressed: _busy ? null : _onAdoptAll,
+          onPressed: (_busy || bridgeBusy) ? null : _onAdoptAll,
           icon: _busy
               ? const SizedBox(
                   width: 14,

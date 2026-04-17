@@ -32,16 +32,17 @@ class BatchService {
     var succeeded = 0;
     var failed = 0;
     final errors = <String>[];
+    final errorsByExePath = <String, String>{};
 
     for (final rule in rules) {
       try {
-        final response = _nvapi.applyExclusion(rule.exePath);
+        final response = await _nvapi.applyExclusion(rule.exePath);
         final ok = (response?['success'] as bool?) ?? false;
         if (!ok) {
+          final msg = (response?['error'] as String?) ?? 'unknown failure';
           failed++;
-          errors.add(
-            '${rule.exeName}: ${(response?['error'] as String?) ?? "unknown failure"}',
-          );
+          errors.add('${rule.exeName}: $msg');
+          errorsByExePath[rule.exePath] = msg;
           continue;
         }
 
@@ -66,9 +67,11 @@ class BatchService {
       } on NvapiException catch (e) {
         failed++;
         errors.add('${rule.exeName}: NVAPI ${e.message}');
+        errorsByExePath[rule.exePath] = 'NVAPI ${e.message}';
       } catch (e) {
         failed++;
         errors.add('${rule.exeName}: $e');
+        errorsByExePath[rule.exePath] = '$e';
       }
     }
 
@@ -77,6 +80,7 @@ class BatchService {
       succeeded: succeeded,
       failed: failed,
       errors: errors,
+      errorsByExePath: errorsByExePath,
     );
   }
 
@@ -88,6 +92,7 @@ class BatchService {
     var succeeded = 0;
     var failed = 0;
     final errors = <String>[];
+    final errorsByExePath = <String, String>{};
 
     for (final rule in rules) {
       try {
@@ -95,14 +100,15 @@ class BatchService {
         if (result.success) {
           succeeded++;
         } else {
+          final msg = result.errorMessage ?? 'unknown failure';
           failed++;
-          errors.add(
-            '${rule.exeName}: ${result.errorMessage ?? "unknown failure"}',
-          );
+          errors.add('${rule.exeName}: $msg');
+          errorsByExePath[rule.exePath] = msg;
         }
       } catch (e) {
         failed++;
         errors.add('${rule.exeName}: $e');
+        errorsByExePath[rule.exePath] = '$e';
       }
     }
 
@@ -111,6 +117,7 @@ class BatchService {
       succeeded: succeeded,
       failed: failed,
       errors: errors,
+      errorsByExePath: errorsByExePath,
     );
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/log_buffer.dart';
+import '../services/notification_service.dart';
 
 /// Read-only viewer for the in-process [LogBuffer]. Live-tails new
 /// entries by default and offers Copy All / Clear / scroll-to-bottom
@@ -15,9 +16,20 @@ class LogsScreen extends StatefulWidget {
   State<LogsScreen> createState() => _LogsScreenState();
 }
 
+/// Coalescing window for live-tail repaints. Chatty code paths (a
+/// scan firing 50 native lines in quick succession) used to call
+/// `setState` once per entry, which meant rebuilding the Logs screen
+/// dozens of times a second. A 100ms throttle collapses those bursts
+/// into a single repaint without making the UI feel stale.
+///
+/// Plan F-25.
+const Duration _kLogTailThrottle = Duration(milliseconds: 100);
+
 class _LogsScreenState extends State<LogsScreen> {
   late List<LogEntry> _entries;
   StreamSubscription<LogEntry>? _sub;
+  StreamSubscription<void>? _clearSub;
+  Timer? _pendingRefresh;
   final ScrollController _scrollController = ScrollController();
   bool _autoScroll = true;
   LogLevel? _filterLevel;
@@ -26,14 +38,16 @@ class _LogsScreenState extends State<LogsScreen> {
   void initState() {
     super.initState();
     _entries = LogBuffer.instance.snapshot();
-    _sub = LogBuffer.instance.stream.listen((_) {
+    _sub = LogBuffer.instance.stream.listen((_) => _scheduleRefresh());
+    _clearSub = LogBuffer.instance.clears.listen((_) {
       if (!mounted) return;
+      // Drop any pending throttled refresh — it would re-snapshot
+      // and possibly resurrect entries that were just cleared.
+      _pendingRefresh?.cancel();
+      _pendingRefresh = null;
       setState(() {
         _entries = LogBuffer.instance.snapshot();
       });
-      if (_autoScroll) {
-        _scheduleScrollToBottom();
-      }
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -43,9 +57,29 @@ class _LogsScreenState extends State<LogsScreen> {
 
   @override
   void dispose() {
+    _pendingRefresh?.cancel();
     _sub?.cancel();
+    _clearSub?.cancel();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Coalesce a flurry of incoming entries into a single setState,
+  /// fired at most once per [_kLogTailThrottle]. The first entry
+  /// schedules the timer; subsequent entries during the window are
+  /// no-ops because the timer is already armed.
+  void _scheduleRefresh() {
+    if (!mounted) return;
+    if (_pendingRefresh?.isActive ?? false) return;
+    _pendingRefresh = Timer(_kLogTailThrottle, () {
+      if (!mounted) return;
+      setState(() {
+        _entries = LogBuffer.instance.snapshot();
+      });
+      if (_autoScroll) {
+        _scheduleScrollToBottom();
+      }
+    });
   }
 
   void _scheduleScrollToBottom() {
@@ -72,16 +106,18 @@ class _LogsScreenState extends State<LogsScreen> {
     }
     await Clipboard.setData(ClipboardData(text: buf.toString()));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Copied ${visible.length} log lines.')),
+    // Route through NotificationService for consistent styling / the
+    // global messenger key (plan F-29).
+    NotificationService.showSuccess(
+      'Copied ${visible.length} log lines.',
+      context: context,
     );
   }
 
   void _clear() {
+    // Relying on the `clears` stream subscription to re-snapshot and
+    // setState — no need to duplicate the work here. See initState.
     LogBuffer.instance.clear();
-    setState(() {
-      _entries = LogBuffer.instance.snapshot();
-    });
   }
 
   @override

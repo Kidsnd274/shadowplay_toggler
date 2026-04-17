@@ -21,9 +21,18 @@ class AutoScanOnLaunchNotifier extends AsyncNotifier<bool> {
     return _repo.getBool(SettingsKeys.autoScanOnLaunch);
   }
 
+  /// Persist [value] first, then broadcast the new in-memory state.
+  ///
+  /// Plan F-21: the old order (update state, then write) meant that a
+  /// failed DB write would leave the UI showing the new value while
+  /// the persisted row kept the old one. A restart — or anything else
+  /// re-reading the repository — would silently revert. Flipping the
+  /// order keeps the two views in lockstep: if the write raises, the
+  /// state stays on the previous value and the caller's snackbar path
+  /// surfaces the failure.
   Future<void> set(bool value) async {
-    state = AsyncValue.data(value);
     await _repo.setBool(SettingsKeys.autoScanOnLaunch, value);
+    state = AsyncValue.data(value);
   }
 }
 

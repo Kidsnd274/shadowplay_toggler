@@ -2,16 +2,23 @@ import 'dart:convert';
 
 import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
+import '../models/managed_rule.dart';
 import '../models/reconciliation_result.dart';
 import '../models/scan_result.dart';
 import 'app_state_repository.dart';
+import 'log_buffer.dart';
 import 'managed_rules_repository.dart';
 import 'scan_service.dart';
 
 /// Key names for reconciliation-related entries in the `app_state` table.
+///
+/// `last_driver_version` used to live here but the native bridge does
+/// not expose a driver-version query, so it was never written. The
+/// corresponding `previousDriverVersion` / `currentDriverVersion`
+/// fields were dropped from [ReconciliationResult] in F-08; add them
+/// back only if/when the bridge gains a real driver-version query.
 class ReconciliationKeys {
   ReconciliationKeys._();
-  static const String lastDriverVersion = 'last_driver_version';
   static const String drsProfileHash = 'drs_profile_hash';
   static const String lastReconcileAt = 'last_reconcile_at';
 }
@@ -35,15 +42,27 @@ class ReconciliationService {
     final started = DateTime.now();
     final previousHash =
         await _stateRepo.getValue(ReconciliationKeys.drsProfileHash);
-    final previousVersion =
-        await _stateRepo.getValue(ReconciliationKeys.lastDriverVersion);
+
+    // Snapshot the managed-rules table once and reuse it below. If the
+    // user mutates the DB (Unadopt, batch, reset) between the scan's
+    // classification pass and the status computation here, we would
+    // otherwise build a [statuses] map against a different set of
+    // rows than the scan saw — producing e.g. "inSync" for an exe that
+    // no longer exists in the DB (F-06).
+    final List<ManagedRule> managed;
+    try {
+      managed = await _rulesRepo.getAllRules();
+    } catch (e) {
+      return ReconciliationResult.fatal('Failed to load managed rules: $e');
+    }
 
     // Delegate the heavy lifting to ScanService.scanProfiles(). It runs
     // the native scan on an isolate and returns the classified buckets
-    // we want (detected / defaults / drifted / orphaned).
+    // we want (detected / defaults / drifted / orphaned). We hand it the
+    // snapshot we just took so both halves agree on the managed set.
     final ScanResult scan;
     try {
-      scan = await _scan.scanProfiles();
+      scan = await _scan.scanProfiles(managedSnapshot: managed);
     } catch (e) {
       return ReconciliationResult.fatal('Reconciliation scan failed: $e');
     }
@@ -54,35 +73,39 @@ class ReconciliationService {
       );
     }
 
+    // Forward any native-side warnings to the log buffer so the Logs
+    // screen has a persistent record even though the startup banner
+    // doesn't surface them visually. Keeps F-33's "warnings" field
+    // meaningful instead of letting it quietly pile up in memory.
+    for (final w in scan.warnings) {
+      LogBuffer.instance.add(LogLevel.warn, '[reconcile] $w');
+    }
+
     final currentHash = _hashScan(scan);
-    final managed = await _rulesRepo.getAllRules();
 
     final drsReset = previousHash != null && previousHash != currentHash;
-    final statuses = <String, ManagedRuleSyncStatus>{};
 
     if (drsReset) {
-      for (final rule in managed) {
-        statuses[rule.exePath] = ManagedRuleSyncStatus.needsReapply;
-      }
-      await _stateRepo.setValue(ReconciliationKeys.drsProfileHash, currentHash);
-      await _stateRepo.setValue(
-        ReconciliationKeys.lastReconcileAt,
-        DateTime.now().toIso8601String(),
-      );
+      await _stateRepo.setValues({
+        ReconciliationKeys.drsProfileHash: currentHash,
+        ReconciliationKeys.lastReconcileAt: DateTime.now().toIso8601String(),
+      });
 
       return ReconciliationResult(
         drsResetDetected: true,
-        previousDriverVersion: previousVersion,
-        currentDriverVersion: null,
         rulesNeedingReapply: managed.length,
-        statuses: statuses,
         managedExeLiveValues: scan.managedExeLiveValues,
         detectedExternalRules: scan.detectedRules,
+        warnings: scan.warnings,
         duration: DateTime.now().difference(started),
       );
     }
 
-    // Normal path: classify each managed rule against the scan buckets.
+    // Normal path: classify each managed rule against the scan buckets
+    // to produce the banner counters. Per-rule sync status is not
+    // persisted on the result — anything row-level the Managed tab
+    // needs is already exposed via driftedManagedRulesProvider /
+    // orphanedManagedRulesProvider (see F-07).
     final drifted = {
       for (final r in scan.driftedManagedRules) r.exePath: r,
     };
@@ -95,33 +118,27 @@ class ReconciliationService {
     var orphanedCount = 0;
     for (final rule in managed) {
       if (drifted.containsKey(rule.exePath)) {
-        statuses[rule.exePath] = ManagedRuleSyncStatus.drifted;
         driftedCount++;
       } else if (orphans.containsKey(rule.exePath)) {
-        statuses[rule.exePath] = ManagedRuleSyncStatus.orphaned;
         orphanedCount++;
       } else {
-        statuses[rule.exePath] = ManagedRuleSyncStatus.inSync;
         inSync++;
       }
     }
 
-    await _stateRepo.setValue(ReconciliationKeys.drsProfileHash, currentHash);
-    await _stateRepo.setValue(
-      ReconciliationKeys.lastReconcileAt,
-      DateTime.now().toIso8601String(),
-    );
+    await _stateRepo.setValues({
+      ReconciliationKeys.drsProfileHash: currentHash,
+      ReconciliationKeys.lastReconcileAt: DateTime.now().toIso8601String(),
+    });
 
     return ReconciliationResult(
       drsResetDetected: false,
-      previousDriverVersion: previousVersion,
-      currentDriverVersion: null,
       rulesInSync: inSync,
       rulesDrifted: driftedCount,
       rulesOrphaned: orphanedCount,
-      statuses: statuses,
       managedExeLiveValues: scan.managedExeLiveValues,
       detectedExternalRules: scan.detectedRules,
+      warnings: scan.warnings,
       duration: DateTime.now().difference(started),
     );
   }
@@ -153,12 +170,19 @@ class ReconciliationService {
     return _stringHash(jsonEncode(payload)).toRadixString(16);
   }
 
-  /// 64-bit FNV-1a string hash. Not cryptographic, but plenty for
-  /// "did the DRS database change?"
+  /// Modified FNV-1a string hash, 63-bit (see below). Not
+  /// cryptographic, but plenty for "did the DRS database change?"
+  ///
+  /// Plan F-50: the original docstring claimed this was 64-bit
+  /// FNV-1a, but strict FNV-1a would mask to `0xFFFFFFFFFFFFFFFF`.
+  /// We mask to `0x7FFFFFFFFFFFFFFF` so the result always fits in a
+  /// positive signed 64-bit int on native Dart (avoiding overflow
+  /// into a negative `toRadixString` that would cosmetically flap the
+  /// stored hash value between runs). The result is deterministic and
+  /// stable across Dart VM versions, which is all this function
+  /// needs — we're detecting DRS-reset drift, not proving collision
+  /// resistance — but it's a modified FNV variant, not textbook FNV.
   int _stringHash(String s) {
-    // FNV offset basis and prime for 64 bit. We stay in 63-bit signed
-    // space because Dart ints on the VM are 64-bit signed — small risk
-    // of overflow on web, which we don't target.
     var hash = 0xcbf29ce484222325;
     const prime = 0x100000001b3;
     for (final codeUnit in s.codeUnits) {

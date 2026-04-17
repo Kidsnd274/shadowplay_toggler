@@ -7,6 +7,7 @@ import '../providers/batch_provider.dart';
 import '../providers/managed_rules_provider.dart';
 import '../providers/multi_select_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../services/notification_service.dart';
 import 'confirmation_dialog.dart';
 
@@ -25,7 +26,20 @@ class BatchActionBar extends ConsumerStatefulWidget {
 class _BatchActionBarState extends ConsumerState<BatchActionBar> {
   bool _busy = false;
 
+  /// Block batch actions while a scan or reconciliation is running —
+  /// see plan F-16.
+  bool _assertBridgeFree() {
+    if (!ref.read(bridgeBusyProvider)) return true;
+    final reconciling = ref.read(isReconcilingProvider);
+    final msg = reconciling
+        ? 'Startup reconciliation is still running — try again in a moment.'
+        : 'A scan is in progress — try again in a moment.';
+    NotificationService.showInfo(msg);
+    return false;
+  }
+
   Future<void> _runBatch({required bool enable}) async {
+    if (!_assertBridgeFree()) return;
     final ids = ref.read(selectedRuleIdsProvider);
     final all = ref.read(managedRulesProvider).valueOrNull ?? const [];
     final selected = all.where((r) => r.id != null && ids.contains(r.id)).toList();
@@ -56,18 +70,25 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
           : await service.batchDisable(selected);
       if (!mounted) return;
       _reportResult(result, verb: verb);
-      // Optimistically update the live-state map for everything that
-      // succeeded. The batch result identifies failures by exePath in
-      // [BatchResult.errors], but the simpler "everything we just
-      // touched" approximation is good enough — any hidden failure
-      // will resolve itself on the next Scan Profiles.
+      // Optimistic live-state update, but only for rows the driver
+      // actually confirmed. A failed apply/clear leaves the DRS value
+      // at whatever it was before, so flipping the badge for a failed
+      // exePath would show the user a state the driver never reached
+      // (plan F-10). Failed rows keep their previous badge until the
+      // next scan overwrites it.
       final stateNotifier =
           ref.read(profileExclusionStateProvider.notifier);
       for (final rule in selected) {
+        if (result.didFailFor(rule.exePath)) continue;
         stateNotifier.setForExe(rule.exePath, enable);
       }
       await ref.read(managedRulesProvider.notifier).refresh();
-      exitMultiSelect(ref);
+      // If everything failed, leave multi-select on so the user can
+      // retry or drill into the offenders — no point clearing the
+      // selection out from under them.
+      if (result.succeeded > 0) {
+        exitMultiSelect(ref);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -105,8 +126,10 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
     final theme = Theme.of(context);
     final ids = ref.watch(selectedRuleIdsProvider);
     final all = ref.watch(managedRulesProvider).valueOrNull ?? const <ManagedRule>[];
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     final count = ids.length;
     final allSelected = count > 0 && count == all.length;
+    final actionsLocked = _busy || bridgeBusy;
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest,
@@ -129,7 +152,7 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
             ),
             const Spacer(),
             FilledButton.icon(
-              onPressed: (_busy || count == 0)
+              onPressed: (actionsLocked || count == 0)
                   ? null
                   : () => _runBatch(enable: true),
               icon: const Icon(Icons.check_circle_outline, size: 16),
@@ -137,7 +160,7 @@ class _BatchActionBarState extends ConsumerState<BatchActionBar> {
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
-              onPressed: (_busy || count == 0)
+              onPressed: (actionsLocked || count == 0)
                   ? null
                   : () => _runBatch(enable: false),
               icon: const Icon(Icons.remove_circle_outline, size: 16),

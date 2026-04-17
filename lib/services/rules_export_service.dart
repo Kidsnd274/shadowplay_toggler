@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+
 import '../models/rules_export.dart';
 import 'add_program_service.dart';
 import 'managed_rules_repository.dart';
@@ -66,13 +68,32 @@ class RulesExportService {
     bool skipMissingFiles = true,
   }) async {
     final raw = await File(filePath).readAsString();
-    final decoded = jsonDecode(raw);
+    // Convert dart:convert's raw FormatException into a user-friendly
+    // message. The default one quotes the offending character index
+    // plus a slice of the file, which is noise for anyone who isn't
+    // reading it in a hex editor. Plan F-11 extends this treatment to
+    // every JSON entry point in the app.
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } on FormatException catch (e) {
+      throw FormatException(
+        'The selected file is not a valid JSON document: ${e.message}',
+      );
+    }
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException(
         'Expected a JSON object at the top level.',
       );
     }
-    final doc = RulesExportDocument.fromJson(decoded);
+    final RulesExportDocument doc;
+    try {
+      doc = RulesExportDocument.fromJson(decoded);
+    } on TypeError catch (e) {
+      throw FormatException(
+        'Import file has the wrong shape for a rules export: $e',
+      );
+    }
 
     var imported = 0;
     var alreadyManaged = 0;
@@ -81,16 +102,25 @@ class RulesExportService {
     final errors = <String>[];
 
     for (final entry in doc.rules) {
-      if (skipMissingFiles && !File(entry.exePath).existsSync()) {
+      // Normalise the path once, up front, so every subsequent decision
+      // in the loop agrees. Without this, `_repo.getRuleByExePath`
+      // could miss a match on a slash-variant of the same file while
+      // `_addProgram.commit` (which normalises internally) would still
+      // upsert to the canonical form — the import would then count it
+      // as a fresh import even though a row already existed. See plan
+      // F-13.
+      final normalizedPath = p.normalize(entry.exePath);
+
+      if (skipMissingFiles && !File(normalizedPath).existsSync()) {
         skippedMissing++;
         continue;
       }
 
-      final existing = await _repo.getRuleByExePath(entry.exePath);
+      final existing = await _repo.getRuleByExePath(normalizedPath);
       final wasAlreadyManaged = existing != null;
 
       try {
-        final result = await _addProgram.commit(entry.exePath);
+        final result = await _addProgram.commit(normalizedPath);
         if (!result.success) {
           failed++;
           errors.add('${entry.exeName}: ${result.errorMessage ?? "failed"}');

@@ -54,7 +54,16 @@ class ScannedRule {
       exeName: exeName,
       profileName: profileName,
       isManaged: sourceType == 'managed',
-      isPredefined: profileIsPredefined,
+      // Treat a rule as predefined if *either* the profile or the
+      // application entry is flagged that way by NVAPI. A
+      // user-attached app inside a predefined profile is not our
+      // mess; neither is an NVIDIA-provided app row inside a user
+      // profile. Without the `appIsPredefined` half, an NVIDIA-
+      // shipped app row inside a non-predefined profile would render
+      // as "external" / user-managed and invite the user to unadopt
+      // or delete something the driver will just resurrect. Plan
+      // F-40.
+      isPredefined: profileIsPredefined || appIsPredefined,
       currentValue: currentValue,
       sourceType: sourceType,
     );
@@ -96,6 +105,14 @@ class ScanResult {
   final Duration scanDuration;
   final String? error;
 
+  /// Per-profile non-fatal issues encountered during the scan (e.g. a
+  /// GetProfileInfo / GetSetting that returned a real NVAPI error
+  /// rather than the benign "setting not present" code). The Dart
+  /// side does not abort the scan — instead these strings are passed
+  /// through so the UI can surface a "scan completed with warnings"
+  /// banner (plan F-19).
+  final List<String> warnings;
+
   const ScanResult({
     this.detectedRules = const [],
     this.nvidiaDefaults = const [],
@@ -107,6 +124,7 @@ class ScanResult {
     this.totalSettingsFound = 0,
     this.scanDuration = Duration.zero,
     this.error,
+    this.warnings = const [],
   });
 
   factory ScanResult.error(String message) =>

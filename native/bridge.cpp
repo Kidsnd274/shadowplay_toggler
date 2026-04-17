@@ -40,9 +40,18 @@ static const char* OOM_JSON = "{\"error\":\"out of memory\"}";
 // the Dart side can distinguish recoverable user errors (e.g. missing admin
 // privilege, status -137) from generic failures. Keep the schema compatible
 // with older callers that only read `success` and `error`.
+// Forward declaration so build_error_json can escape the payload.
+static std::string escape_json_string(const std::string& s);
+
+// Plan F-41: always escape the error string before embedding it in
+// the JSON envelope. Today all call sites pass literals so the prior
+// no-escape form happened to work, but a literal containing `"` or
+// `\` — or, down the road, a dynamic message built from NVAPI text or
+// a path — would emit invalid JSON and crash the Dart side with a
+// `FormatException` that masks the original failure entirely.
 static std::string build_error_json(const char* error, int nvapiStatus) {
     std::string out = "{\"success\":false,\"error\":\"";
-    out += error;
+    out += escape_json_string(error ? error : "");
     out += "\",\"nvapiStatus\":";
     out += std::to_string(nvapiStatus);
     out += "}";
@@ -51,11 +60,21 @@ static std::string build_error_json(const char* error, int nvapiStatus) {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
+// Both helpers must tolerate MultiByteToWideChar/WideCharToMultiByte
+// returning 0 (which is how Win32 signals "invalid input" / "no
+// buffer"). Previously the code trusted the returned length
+// blindly — on failure `std::wstring wide(0, 0)` creates an empty
+// string and the subsequent call writes into `&wide[0]`, which is
+// only safe on some STL implementations and in any case yields a
+// silently-corrupted result downstream (e.g. profile names rendering
+// as empty strings in the UI). Plan F-17.
 static std::wstring utf8_to_wide(const char* utf8) {
     if (!utf8 || !*utf8) return {};
     int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
-    std::wstring wide(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, &wide[0], len);
+    if (len <= 0) return {};
+    std::wstring wide(static_cast<size_t>(len), L'\0');
+    int written = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, &wide[0], len);
+    if (written <= 0) return {};
     if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
     return wide;
 }
@@ -63,8 +82,10 @@ static std::wstring utf8_to_wide(const char* utf8) {
 static std::string wide_to_utf8(const wchar_t* wide) {
     if (!wide || !*wide) return {};
     int len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8(len, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wide, -1, &utf8[0], len, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string utf8(static_cast<size_t>(len), '\0');
+    int written = WideCharToMultiByte(CP_UTF8, 0, wide, -1, &utf8[0], len, nullptr, nullptr);
+    if (written <= 0) return {};
     if (!utf8.empty() && utf8.back() == '\0') utf8.pop_back();
     return utf8;
 }
@@ -81,6 +102,14 @@ static void utf8_to_nvu16(const char* utf8, NvU16* dst, size_t dstLen) {
     dst[copyLen] = 0;
 }
 
+// Plan F-42: the previous escape table only covered the subset of C0
+// controls that have shortcut escapes in the JSON grammar (`\n`,
+// `\r`, `\t`). Every other byte in the `0x00..0x1F` range — e.g. a
+// stray `0x01` inside a mangled NVAPI string — was emitted verbatim
+// and made the whole response invalid JSON (the JSON spec forbids
+// unescaped control characters in string literals). Fall back to
+// `\u00XX` for any other C0 byte so we always produce well-formed
+// output.
 static std::string escape_json_string(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 16);
@@ -91,7 +120,18 @@ static std::string escape_json_string(const std::string& s) {
             case '\n': out += "\\n";  break;
             case '\r': out += "\\r";  break;
             case '\t': out += "\\t";  break;
-            default:   out += c;      break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                                "\\u%04x", static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+                break;
         }
     }
     return out;
@@ -333,9 +373,18 @@ const char* bridge_find_application(const char* appName) {
     if (status != NVAPI_OK)
         return alloc_json("{\"found\":false}");
 
+    // Surface a GetProfileInfo failure instead of silently returning
+    // garbage for the profile fields. The old code ignored the status
+    // and let `profileInfo.profileName` be uninitialised memory when
+    // NVAPI said no, which made downstream Dart decisions (e.g. "is
+    // this predefined?") unreliable. Plan F-18.
     NVDRS_PROFILE profileInfo = {};
     profileInfo.version = NVDRS_PROFILE_VER;
-    NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+    NvAPI_Status infoStatus =
+        NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+    bridge_log("  GetProfileInfo -> %d", static_cast<int>(infoStatus));
+    if (infoStatus != NVAPI_OK)
+        return alloc_json("{\"found\":false}");
 
     std::string aName  = escape_json_string(nvu16_to_utf8(app.appName));
     std::string pName  = escape_json_string(nvu16_to_utf8(profileInfo.profileName));
@@ -661,10 +710,18 @@ const char* bridge_clear_exclusion(const char* appName) {
             "find failed", static_cast<int>(status)));
     }
 
+    // Guard against a GetProfileInfo failure here too (plan F-18).
+    // The profileName field feeds the success response that the Dart
+    // layer uses to confirm which profile was modified — if the call
+    // fails we'd echo an empty name and the UI would render "cleared
+    // exclusion on <blank>" with no way to correlate back.
     NVDRS_PROFILE profileInfo = {};
     profileInfo.version = NVDRS_PROFILE_VER;
-    NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
-    std::string profileName = nvu16_to_utf8(profileInfo.profileName);
+    NvAPI_Status infoStatus2 =
+        NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
+    bridge_log("  GetProfileInfo -> %d", static_cast<int>(infoStatus2));
+    std::string profileName =
+        (infoStatus2 == NVAPI_OK) ? nvu16_to_utf8(profileInfo.profileName) : std::string{};
 
     NVDRS_SETTING current = {};
     current.version = NVDRS_SETTING_VER;
@@ -842,6 +899,14 @@ const char* bridge_scan_exclusion_rules(unsigned int settingId) {
     NvU32 scannedProfiles = 0;
     NvU32 settingsFound = 0;
 
+    // Warnings for profiles we couldn't introspect cleanly. Kept
+    // separate from the fatal `error` field so the Dart side can surface
+    // them as a non-blocking banner instead of aborting the whole scan.
+    // Plan F-19: previously any GetSetting non-OK status was silently
+    // treated the same as NVAPI_SETTING_NOT_FOUND, hiding real driver
+    // errors (e.g. NVAPI_ACCESS_DENIED) behind "scan returned 0 rules".
+    std::vector<std::string> warnings;
+
     for (NvU32 i = 0; i < profileCount; i++) {
         NvDRSProfileHandle hProfile = 0;
         status = NvAPI_DRS_EnumProfiles(g_session, i, &hProfile);
@@ -851,12 +916,29 @@ const char* bridge_scan_exclusion_rules(unsigned int settingId) {
         NVDRS_PROFILE profileInfo = {};
         profileInfo.version = NVDRS_PROFILE_VER;
         status = NvAPI_DRS_GetProfileInfo(g_session, hProfile, &profileInfo);
-        if (status != NVAPI_OK) continue;
+        if (status != NVAPI_OK) {
+            warnings.push_back(
+                "GetProfileInfo failed on profile #" + std::to_string(i) +
+                " (status " + std::to_string(static_cast<int>(status)) + ")");
+            continue;
+        }
 
         NVDRS_SETTING setting = {};
         setting.version = NVDRS_SETTING_VER;
         status = NvAPI_DRS_GetSetting(g_session, hProfile, settingId, &setting);
-        if (status != NVAPI_OK) continue;  // profile doesn't carry this setting
+        if (status == NVAPI_SETTING_NOT_FOUND) {
+            // Normal path: this profile simply doesn't carry the setting.
+            continue;
+        }
+        if (status != NVAPI_OK) {
+            // Profile *should* carry the setting but the call failed —
+            // surface it so we don't silently under-report.
+            std::string pname = nvu16_to_utf8(profileInfo.profileName);
+            warnings.push_back(
+                "GetSetting failed on profile \"" + pname +
+                "\" (status " + std::to_string(static_cast<int>(status)) + ")");
+            continue;
+        }
         settingsFound++;
 
         std::string profileName = nvu16_to_utf8(profileInfo.profileName);
@@ -952,6 +1034,16 @@ const char* bridge_scan_exclusion_rules(unsigned int settingId) {
         bridge_log("  WARNING: scan exceeded 2000 ms");
     }
 
+    // Non-fatal warnings accumulated by the scan loop (plan F-19). The
+    // Dart side surfaces these via `ScanResult.warnings` without
+    // marking the whole scan as failed.
+    std::string warningsJson = "[";
+    for (size_t w = 0; w < warnings.size(); ++w) {
+        if (w > 0) warningsJson += ",";
+        warningsJson += "\"" + escape_json_string(warnings[w]) + "\"";
+    }
+    warningsJson += "]";
+
     std::string json = "{\"durationMs\":";
     json += std::to_string(durationMsInt);
     json += ",\"profilesScanned\":";
@@ -962,6 +1054,8 @@ const char* bridge_scan_exclusion_rules(unsigned int settingId) {
     json += rulesJson;
     json += ",\"baseProfile\":";
     json += baseJson;
+    json += ",\"warnings\":";
+    json += warningsJson;
     json += "}";
     return alloc_json(json);
 }

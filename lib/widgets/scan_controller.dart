@@ -9,6 +9,7 @@ import '../providers/managed_rules_provider.dart';
 import '../providers/nvidia_defaults_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
 import '../providers/scan_provider.dart';
+import '../services/notification_service.dart';
 
 /// App-state key for persisting the last-scan timestamp across sessions.
 const _kLastScanAtKey = 'last_scan_at';
@@ -22,13 +23,14 @@ Future<void> runScan(BuildContext context, WidgetRef ref) async {
   ref.read(isScanningProvider.notifier).state = true;
 
   final service = ref.read(scanServiceProvider);
-  final messenger = ScaffoldMessenger.maybeOf(context);
 
   try {
     final result = await service.scanProfiles();
     if (result.hasError) {
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Scan failed: ${result.error}')),
+      if (!context.mounted) return;
+      NotificationService.showError(
+        'Scan failed: ${result.error}',
+        context: context,
       );
       return;
     }
@@ -53,15 +55,23 @@ Future<void> runScan(BuildContext context, WidgetRef ref) async {
         .read(appStateRepositoryProvider)
         .setValue(_kLastScanAtKey, now.toIso8601String()));
 
-    messenger?.showSnackBar(
-      SnackBar(
-        content: Text(
-          'Scan complete: ${result.detectedRules.length} external, '
-          '${result.nvidiaDefaults.length} defaults '
-          '(${result.scanDuration.inMilliseconds} ms).',
-        ),
-      ),
-    );
+    if (!context.mounted) return;
+    final message = 'Scan complete: ${result.detectedRules.length} external, '
+        '${result.nvidiaDefaults.length} defaults '
+        '(${result.scanDuration.inMilliseconds} ms).';
+    // Surface non-fatal native warnings (plan F-19). These come from
+    // profiles where GetSetting failed for a non-"not-found" reason —
+    // the scan still produced a result, but the user should know some
+    // rows may be incomplete.
+    if (result.warnings.isNotEmpty) {
+      NotificationService.showWarning(
+        '$message ${result.warnings.length} warning'
+        '${result.warnings.length == 1 ? '' : 's'} — check Logs.',
+        context: context,
+      );
+    } else {
+      NotificationService.showSuccess(message, context: context);
+    }
   } finally {
     ref.read(isScanningProvider.notifier).state = false;
   }

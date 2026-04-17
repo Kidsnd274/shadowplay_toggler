@@ -1,55 +1,61 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
 
 import '../constants/app_constants.dart';
 import '../models/exclusion_rule.dart';
 import '../models/managed_rule.dart';
 import '../models/scan_result.dart';
-import '../native/bridge_ffi.dart';
 import 'managed_rules_repository.dart';
-
-/// Top-level worker that runs inside a spawned isolate. Function pointers
-/// cannot cross isolates, so we construct a brand-new [BridgeFfi] in the
-/// worker against the same DLL path. The DLL's global state (notably
-/// `g_session`) is shared with the parent isolate because Windows returns
-/// the same handle for `LoadLibrary` on an already-loaded module.
-String? _scanInIsolate(int settingId) {
-  final bridge = BridgeFfi();
-  return bridge.scanExclusionRules(settingId);
-}
+import 'nvapi_service.dart';
 
 /// Orchestrates the full DRS scan described in
 /// `plans/23-scan-profiles-feature.md`.
 ///
 /// Concurrent scans are serialised via a simple guard; a second caller
 /// receives the same future as the first in-flight call. The scan itself
-/// runs on a worker isolate so the UI thread is never blocked.
+/// runs on a worker isolate so the UI thread is never blocked. The
+/// worker's DLL entry is serialised with every other NVAPI call via the
+/// shared [NvapiService] bridge lock — see
+/// [NvapiService.scanExclusionRulesJsonAsync].
 class ScanService {
+  final NvapiService _nvapi;
   final ManagedRulesRepository _repo;
   final int _settingId;
 
   Future<ScanResult>? _inflight;
 
-  ScanService(this._repo, {int settingId = AppConstants.captureSettingId})
-      : _settingId = settingId;
+  ScanService(
+    this._nvapi,
+    this._repo, {
+    int settingId = AppConstants.captureSettingId,
+  }) : _settingId = settingId;
 
   bool get isScanning => _inflight != null;
 
-  Future<ScanResult> scanProfiles() {
+  /// Run a full DRS scan and return classified buckets.
+  ///
+  /// If [managedSnapshot] is provided, it is used verbatim for
+  /// classification instead of re-querying the local DB. Reconciliation
+  /// uses this to guarantee that the scan and the subsequent
+  /// reconciliation pass see the same managed-rule set — a user clicking
+  /// Unadopt mid-reconciliation would otherwise leave the two halves
+  /// disagreeing about what's managed (F-06).
+  Future<ScanResult> scanProfiles({
+    List<ManagedRule>? managedSnapshot,
+  }) {
     final inflight = _inflight;
     if (inflight != null) return inflight;
 
-    final future = _runScan();
+    final future = _runScan(managedSnapshot: managedSnapshot);
     _inflight = future;
     return future.whenComplete(() => _inflight = null);
   }
 
-  Future<ScanResult> _runScan() async {
+  Future<ScanResult> _runScan({List<ManagedRule>? managedSnapshot}) async {
     final started = DateTime.now();
     String? json;
     try {
-      json = await Isolate.run(() => _scanInIsolate(_settingId));
+      json = await _nvapi.scanExclusionRulesJsonAsync(_settingId);
     } catch (e) {
       return ScanResult.error('Scan failed: $e');
     }
@@ -60,11 +66,19 @@ class ScanService {
       );
     }
 
+    // Routes FormatException (bad JSON) and TypeError (right JSON,
+    // wrong shape) through the same human-readable failure path so the
+    // user gets "Malformed scan response" instead of a raw
+    // dart:convert stack trace. Plan F-11.
     Map<String, dynamic> doc;
     try {
       doc = jsonDecode(json) as Map<String, dynamic>;
-    } catch (e) {
-      return ScanResult.error('Malformed scan response: $e');
+    } on FormatException catch (e) {
+      return ScanResult.error('Scan returned malformed JSON: ${e.message}');
+    } on TypeError catch (e) {
+      return ScanResult.error(
+        'Scan returned JSON with unexpected shape: $e',
+      );
     }
 
     final error = doc['error'] as String?;
@@ -87,7 +101,11 @@ class ScanService {
         ? ScannedRule.fromJson(baseRaw)
         : null;
 
-    final managedRules = await _repo.getAllRules();
+    final warnings = (doc['warnings'] as List<dynamic>? ?? const [])
+        .map((e) => e.toString())
+        .toList(growable: false);
+
+    final managedRules = managedSnapshot ?? await _repo.getAllRules();
     final classification =
         _classify(scanned: rawRules, managed: managedRules);
 
@@ -101,6 +119,7 @@ class ScanService {
       totalProfilesScanned: profilesScanned,
       totalSettingsFound: settingsFound,
       scanDuration: Duration(milliseconds: durationMs),
+      warnings: warnings,
     );
   }
 

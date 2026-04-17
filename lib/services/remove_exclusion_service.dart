@@ -30,7 +30,7 @@ class RemoveExclusionService {
   }) async {
     Map<String, dynamic>? response;
     try {
-      response = _nvapi.clearExclusion(rule.exePath);
+      response = await _nvapi.clearExclusion(rule.exePath);
     } on NvapiBridgeException catch (e) {
       return RemoveResult.failure('NVAPI error: ${e.message}');
     }
@@ -55,9 +55,7 @@ class RemoveExclusionService {
     // drop the row (always — regardless of removeFromLocalDb) because
     // keeping it would leave the UI showing a rule pointing at nothing.
     if (action == 'not_found') {
-      if (rule.id != null) {
-        await _repo.deleteRule(rule.id!);
-      }
+      await _deleteLocalRow(rule);
       return RemoveResult(
         success: true,
         action: 'stale_db_cleanup',
@@ -72,8 +70,8 @@ class RemoveExclusionService {
       _ => 'setting_deleted',
     };
 
-    if (removeFromLocalDb && rule.id != null) {
-      await _repo.deleteRule(rule.id!);
+    if (removeFromLocalDb) {
+      await _deleteLocalRow(rule);
     }
 
     return RemoveResult(
@@ -81,6 +79,24 @@ class RemoveExclusionService {
       action: mappedAction,
       removedFromLocalDb: removeFromLocalDb,
     );
+  }
+
+  /// Drop the [rule] from the local DB, preferring the primary key but
+  /// falling back to the exePath when [ManagedRule.id] is null.
+  ///
+  /// Plan F-14: callers sometimes build `ManagedRule` objects from
+  /// untrusted sources (adopt flow, scan results) that have not yet
+  /// been round-tripped through the repository, so they lack an id.
+  /// Silently skipping the delete in that case leaves a ghost row the
+  /// user has to discover via another scan.
+  Future<void> _deleteLocalRow(ManagedRule rule) async {
+    if (rule.id != null) {
+      await _repo.deleteRule(rule.id!);
+      return;
+    }
+    if (rule.exePath.isNotEmpty) {
+      await _repo.deleteRuleByExePath(rule.exePath);
+    }
   }
 
   /// Same NVAPI operation as [removeExclusion] but keeps the managed-rule

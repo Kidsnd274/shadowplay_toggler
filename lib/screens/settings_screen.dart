@@ -10,9 +10,13 @@ import '../models/rules_export.dart';
 import '../providers/database_provider.dart';
 import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rules_provider.dart';
+import '../providers/multi_select_provider.dart';
 import '../providers/nvidia_defaults_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/rules_export_provider.dart';
+import '../providers/scan_provider.dart';
+import '../providers/selected_rule_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/notification_service.dart';
 import '../services/reset_database_service.dart';
@@ -141,6 +145,7 @@ class _ExportImportSectionState extends ConsumerState<_ExportImportSection> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final busy = ref.watch(isExportingOrImportingRulesProvider);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     final rulesAsync = ref.watch(managedRulesProvider);
     final count = rulesAsync.valueOrNull?.length ?? 0;
 
@@ -176,7 +181,7 @@ class _ExportImportSectionState extends ConsumerState<_ExportImportSection> {
                 label: const Text('Export to JSON…'),
               ),
               OutlinedButton.icon(
-                onPressed: busy ? null : _runImport,
+                onPressed: (busy || bridgeBusy) ? null : _runImport,
                 icon: const Icon(Icons.file_upload_outlined, size: 16),
                 label: const Text('Import from JSON…'),
               ),
@@ -221,6 +226,15 @@ class _ExportImportSectionState extends ConsumerState<_ExportImportSection> {
   }
 
   Future<void> _runImport() async {
+    if (ref.read(bridgeBusyProvider)) {
+      NotificationService.showInfo(
+        ref.read(isReconcilingProvider)
+            ? 'Startup reconciliation is still running — try again in a moment.'
+            : 'A scan is in progress — try again in a moment.',
+        context: context,
+      );
+      return;
+    }
     final picked = await FilePicker.pickFiles(
       dialogTitle: 'Select managed-rules JSON',
       type: FileType.custom,
@@ -323,6 +337,7 @@ class _ResetDatabaseSectionState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     return _SectionCard(
       icon: Icons.warning_amber_rounded,
       iconColor: theme.colorScheme.error,
@@ -343,7 +358,7 @@ class _ResetDatabaseSectionState
           Align(
             alignment: Alignment.centerLeft,
             child: OutlinedButton.icon(
-              onPressed: _busy ? null : _onResetPressed,
+              onPressed: (_busy || bridgeBusy) ? null : _onResetPressed,
               style: OutlinedButton.styleFrom(
                 foregroundColor: theme.colorScheme.error,
                 side: BorderSide(color: theme.colorScheme.error),
@@ -364,6 +379,16 @@ class _ResetDatabaseSectionState
   }
 
   Future<void> _onResetPressed() async {
+    if (ref.read(bridgeBusyProvider)) {
+      NotificationService.showInfo(
+        ref.read(isReconcilingProvider)
+            ? 'Startup reconciliation is still running — try again in a moment.'
+            : 'A scan is in progress — try again in a moment.',
+        context: context,
+      );
+      return;
+    }
+
     final confirmed = await ConfirmationDialog.show(
       context,
       title: 'Reset local database?',
@@ -381,10 +406,19 @@ class _ResetDatabaseSectionState
       await ref.read(resetDatabaseServiceProvider).reset();
       if (!mounted) return;
 
-      // Clear any in-memory state that referenced the now-gone rows.
+      // Clear every in-memory surface that referenced the now-gone rows.
+      // Anything that holds an id/exePath the user selected or a scan
+      // snapshot taken before the wipe has to be discarded, otherwise
+      // the UI will render phantom rows (and crash if the user clicks
+      // one) until the next reconciliation round-trips.
       ref.read(detectedRulesProvider.notifier).clear();
       ref.read(nvidiaDefaultsProvider.notifier).clear();
       ref.read(profileExclusionStateProvider.notifier).setAll(const {});
+      ref.read(selectedRuleProvider.notifier).state = null;
+      exitMultiSelect(ref);
+      ref.read(lastScanResultProvider.notifier).state = null;
+      ref.read(lastScanAtProvider.notifier).state = null;
+      ref.read(lastReconciliationProvider.notifier).state = null;
       await ref.read(managedRulesProvider.notifier).refresh();
 
       // The auto-scan toggle is loaded from the now-empty app_state

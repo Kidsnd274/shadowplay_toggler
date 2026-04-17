@@ -61,8 +61,14 @@ class RuleListTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final selected = ref.watch(selectedRuleProvider);
-    final isSelected = !multiSelectMode && selected == rule;
+    // Only rebuild when *this* row's selection status flips, not when
+    // any other row becomes selected. A broad `watch(selectedRuleProvider)`
+    // causes every tile in the list to rebuild on every selection
+    // change, which is visibly laggy once the user has a few hundred
+    // rows. Plan F-24.
+    final isSelected = ref.watch(
+      selectedRuleProvider.select((sel) => !multiSelectMode && sel == rule),
+    );
 
     final titleStyle = theme.textTheme.bodyMedium?.copyWith(
       fontWeight: FontWeight.w600,

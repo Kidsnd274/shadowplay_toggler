@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +12,12 @@ import '../providers/selected_tab_provider.dart';
 import 'detected_rules_tab.dart';
 import 'managed_rules_tab.dart';
 import 'nvidia_defaults_tab.dart';
+
+/// Window between the last keystroke and the search provider update.
+/// Long enough to avoid per-keystroke rebuilds of the three filter
+/// providers (each of which walks the full rules list), short enough
+/// that the user still perceives the filter as "live". Plan F-23.
+const Duration _kSearchDebounce = Duration(milliseconds: 150);
 
 class LeftPane extends ConsumerStatefulWidget {
   final VoidCallback? onScanProfiles;
@@ -25,6 +33,7 @@ class _LeftPaneState extends ConsumerState<LeftPane>
   late final TabController _tabController;
   late final TextEditingController _searchController;
   late final FocusNode _searchFocus;
+  Timer? _searchDebounceTimer;
 
   @override
   void initState() {
@@ -44,6 +53,7 @@ class _LeftPaneState extends ConsumerState<LeftPane>
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _tabController.removeListener(_handleTabChanged);
     _tabController.dispose();
     _searchController.removeListener(_handleSearchChanged);
@@ -57,14 +67,31 @@ class _LeftPaneState extends ConsumerState<LeftPane>
     final newTab = LeftPaneTab.values[_tabController.index];
     if (ref.read(selectedTabProvider) != newTab) {
       ref.read(selectedTabProvider.notifier).state = newTab;
+      // Multi-select is only meaningful inside the Managed tab's list
+      // of rows — the Detected and Defaults tabs don't wire it up at
+      // all. Leaving it active when the user tabs away presents a
+      // stale "N selected" action bar with no selection backing it
+      // and no way to exit multi-select from the other tabs. Plan
+      // F-30.
+      if (ref.read(multiSelectModeProvider)) {
+        exitMultiSelect(ref);
+      }
     }
   }
 
   void _handleSearchChanged() {
-    final text = _searchController.text;
-    if (ref.read(searchProvider) != text) {
-      ref.read(searchProvider.notifier).state = text;
-    }
+    // Coalesce rapid typing into one provider write. Clearing the
+    // field (or pasting) lands as a single keystroke and should still
+    // go through the debounce — otherwise the UI shows a half-step
+    // where the provider still has the old query.
+    _searchDebounceTimer?.cancel();
+    _searchDebounceTimer = Timer(_kSearchDebounce, () {
+      if (!mounted) return;
+      final text = _searchController.text;
+      if (ref.read(searchProvider) != text) {
+        ref.read(searchProvider.notifier).state = text;
+      }
+    });
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {

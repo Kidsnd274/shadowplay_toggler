@@ -10,6 +10,7 @@ import '../models/exclusion_rule.dart';
 import '../providers/database_provider.dart';
 import '../providers/managed_rules_provider.dart';
 import '../providers/nvapi_service_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../services/notification_service.dart';
 import '../services/nvapi_service.dart';
 
@@ -131,7 +132,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
 
     try {
       final nvapi = ref.read(nvapiServiceProvider);
-      final data = nvapi.getSetting(index, AppConstants.captureSettingId);
+      final data = await nvapi.getSetting(index, AppConstants.captureSettingId);
       if (!mounted) return;
       setState(() {
         _profileIndex = index;
@@ -154,7 +155,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
     if (_profileIndex != null && _profileIndex! >= 0) return _profileIndex;
     try {
       final nvapi = ref.read(nvapiServiceProvider);
-      final profiles = nvapi.getAllProfiles();
+      final profiles = await nvapi.getAllProfiles();
       for (final p in profiles) {
         if (p.name == widget.rule.profileName) return p.index;
       }
@@ -164,7 +165,22 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
     return null;
   }
 
+  /// Backstop for raw hex writes while a scan or reconciliation is in
+  /// flight — we must not enter the shared bridge session concurrently.
+  /// The Apply / Reset buttons already grey out via [bridgeBusyProvider],
+  /// but keyboard shortcuts or rapid clicks can still land mid-transition.
+  bool _assertBridgeFree() {
+    if (!ref.read(bridgeBusyProvider)) return true;
+    final reconciling = ref.read(isReconcilingProvider);
+    final msg = reconciling
+        ? 'Startup reconciliation is still running — try again in a moment.'
+        : 'A scan is in progress — try again in a moment.';
+    NotificationService.showInfo(msg);
+    return false;
+  }
+
   Future<void> _applyHex() async {
+    if (!_assertBridgeFree()) return;
     final parsed = _parseHex(_hexController.text);
     if (parsed == null) {
       NotificationService.showWarning(
@@ -184,7 +200,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
     setState(() => _busy = true);
     try {
       final nvapi = ref.read(nvapiServiceProvider);
-      final status = nvapi.setDwordSettingRaw(
+      final status = await nvapi.setDwordSettingRaw(
         index,
         AppConstants.captureSettingId,
         parsed,
@@ -198,7 +214,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
         );
         return;
       }
-      nvapi.saveSettings();
+      await nvapi.saveSettings();
       await _persistIntendedValue(parsed);
       await _refreshLiveInfo();
       NotificationService.showSuccess(
@@ -216,6 +232,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
   }
 
   Future<void> _resetToDefault() async {
+    if (!_assertBridgeFree()) return;
     final index = await _resolveProfileIndex();
     if (index == null) {
       NotificationService.showError(
@@ -227,13 +244,13 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
     setState(() => _busy = true);
     try {
       final nvapi = ref.read(nvapiServiceProvider);
-      final status = nvapi.restoreSettingDefaultRaw(
+      final status = await nvapi.restoreSettingDefaultRaw(
         index,
         AppConstants.captureSettingId,
       );
       if (status != 0) {
         // Some profiles have no predefined value — fall back to delete.
-        final deleteStatus = nvapi.deleteSettingRaw(
+        final deleteStatus = await nvapi.deleteSettingRaw(
           index,
           AppConstants.captureSettingId,
         );
@@ -247,7 +264,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
           return;
         }
       }
-      nvapi.saveSettings();
+      await nvapi.saveSettings();
       await _refreshLiveInfo();
       NotificationService.showSuccess('Setting reset to default.');
       NotificationService.showRestartTargetHint(widget.rule.exeName);
@@ -280,6 +297,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: theme.dividerTheme.color ?? Colors.grey),
@@ -335,7 +353,7 @@ class _AdvancedEditorState extends ConsumerState<AdvancedEditor> {
                   if (widget.allowEdit)
                     _HexEditorRow(
                       controller: _hexController,
-                      busy: _busy,
+                      busy: _busy || bridgeBusy,
                       onApply: _applyHex,
                       onReset: _resetToDefault,
                     )

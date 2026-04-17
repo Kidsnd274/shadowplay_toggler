@@ -8,6 +8,7 @@ import '../providers/detected_rules_provider.dart';
 import '../providers/managed_rule_actions_provider.dart';
 import '../providers/managed_rules_provider.dart';
 import '../providers/profile_exclusion_state_provider.dart';
+import '../providers/reconciliation_provider.dart';
 import '../providers/selected_rule_provider.dart';
 import '../services/notification_service.dart';
 import 'adopt_rule_button.dart';
@@ -174,29 +175,43 @@ enum _RuleMenuAction { unadopt, deleteProfile }
 class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   bool _busy = false;
 
-  /// Locates the live [ManagedRule] row for the currently-selected
-  /// exclusion. Returns a best-effort synthesized row if the provider
-  /// hasn't emitted yet (first frame after startup), so the UI can still
-  /// render something meaningful.
-  ManagedRule _effectiveManaged(List<ManagedRule>? rules) {
-    if (rules != null) {
-      for (final r in rules) {
-        if (r.exePath == widget.rule.exePath) return r;
-      }
+  /// Refuse bridge-touching row mutations while a scan or the startup
+  /// reconciliation is running — see plan F-16. The toggle/unadopt/menu
+  /// are already greyed out by watching [bridgeBusyProvider] in the
+  /// build, but this guards racy paths (keyboard, first-frame clicks).
+  bool _assertBridgeFree() {
+    if (!ref.read(bridgeBusyProvider)) return true;
+    final reconciling = ref.read(isReconcilingProvider);
+    final msg = reconciling
+        ? 'Startup reconciliation is still running — try again in a moment.'
+        : 'A scan is in progress — try again in a moment.';
+    NotificationService.showInfo(msg, context: context);
+    return false;
+  }
+
+  /// Finds the live [ManagedRule] row that backs `widget.rule`.
+  ///
+  /// Returns `null` when the rules list doesn't contain an entry for
+  /// this exePath. The caller must interpret that correctly:
+  ///
+  ///   * `rules == null` → the [managedRulesProvider] hasn't emitted
+  ///     yet (first frame after startup). Show a spinner instead of
+  ///     synthesising a ghost row — a synthesised row would let the
+  ///     toggle/unadopt/delete actions fire against stale data.
+  ///   * `rules != null && result == null` → the row was deleted out
+  ///     from under the selection (e.g. via Unadopt from another pane,
+  ///     Reset Database, or a reconciliation orphan-removal). Clear the
+  ///     selection so [RightPane] falls back to the empty state instead
+  ///     of rendering against a fabricated rule.
+  ManagedRule? _findManaged(List<ManagedRule> rules) {
+    for (final r in rules) {
+      if (r.exePath == widget.rule.exePath) return r;
     }
-    return ManagedRule(
-      exePath: widget.rule.exePath,
-      exeName: widget.rule.exeName,
-      profileName: widget.rule.profileName,
-      profileWasPredefined: widget.rule.isPredefined,
-      profileWasCreated: false,
-      intendedValue: widget.rule.currentValue,
-      createdAt: widget.rule.createdAt ?? DateTime.now(),
-      updatedAt: widget.rule.updatedAt ?? DateTime.now(),
-    );
+    return null;
   }
 
   Future<void> _onToggle(ManagedRule managed, bool enabled) async {
+    if (!_assertBridgeFree()) return;
     setState(() => _busy = true);
     final service = ref.read(managedRuleActionsServiceProvider);
     final result = await service.setExclusionEnabled(managed, enabled);
@@ -248,6 +263,7 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   }
 
   Future<void> _confirmUnadopt(ManagedRule managed) async {
+    if (!_assertBridgeFree()) return;
     final confirmed = await ConfirmationDialog.show(
       context,
       title: 'Unadopt ${managed.exeName}?',
@@ -309,6 +325,7 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   }
 
   Future<void> _confirmDeleteProfile(ManagedRule managed) async {
+    if (!_assertBridgeFree()) return;
     if (managed.profileWasPredefined) {
       NotificationService.showWarning(
         'Cannot delete NVIDIA-predefined profile "${managed.profileName}".',
@@ -359,16 +376,48 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final managedRules = ref.watch(managedRulesProvider).valueOrNull;
-    final managed = _effectiveManaged(managedRules);
+    final managedRulesAsync = ref.watch(managedRulesProvider);
+    final managedRules = managedRulesAsync.valueOrNull;
+
+    // First frame after startup — the rules query is still in flight.
+    // Rendering anything meaningful would require synthesising a
+    // ManagedRule, which is the exact bug F-04 is removing. Show a
+    // spinner for the ~handful of frames it takes the provider to hydrate.
+    if (managedRules == null) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final managed = _findManaged(managedRules);
+
+    // Row disappeared out from under the selection (Unadopt elsewhere,
+    // Reset DB, reconciliation cleaned up an orphan). Clear the
+    // selection on the next frame so [RightPane] renders the empty
+    // placeholder instead of showing a fabricated ghost row the user
+    // can still click. We can't set the provider state mid-build — do it
+    // post-frame.
+    if (managed == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (ref.read(selectedRuleProvider)?.exePath == widget.rule.exePath) {
+          ref.read(selectedRuleProvider.notifier).state = null;
+        }
+      });
+      return const _EmptyDetail();
+    }
+
     final exclusionState =
         ref.watch(profileExclusionStateProvider)[managed.exePath];
+    final bridgeBusy = ref.watch(bridgeBusyProvider);
     // Treat unknown / missing as "not excluded" for the toggle and badge —
     // the user can still flip the switch on, and we'll show a missing-
     // profile note further down if applicable.
     final exclusionEnabled = exclusionState ?? false;
     final stateUnknown = exclusionState == null;
     final isPredef = managed.profileWasPredefined;
+    final rowLocked = _busy || bridgeBusy;
 
     final ruleForFields = widget.rule.copyWith(
       currentValue: exclusionEnabled
@@ -396,10 +445,10 @@ class _ManagedRuleDetailState extends ConsumerState<_ManagedRuleDetail> {
             _ToggleRow(
               enabled: exclusionEnabled,
               busy: _busy,
-              onChanged: _busy ? null : (v) => _onToggle(managed, v),
-              onUnadopt: _busy ? null : () => _confirmUnadopt(managed),
+              onChanged: rowLocked ? null : (v) => _onToggle(managed, v),
+              onUnadopt: rowLocked ? null : () => _confirmUnadopt(managed),
               onMenuAction:
-                  _busy ? null : (action) => _onMenuAction(managed, action),
+                  rowLocked ? null : (action) => _onMenuAction(managed, action),
               profileIsPredefined: isPredef,
             ),
             const SizedBox(height: 8),
@@ -600,7 +649,21 @@ class _HeaderRow extends StatelessWidget {
                   style: theme.textTheme.titleLarge,
                   overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
-              Text(rule.exePath, style: theme.textTheme.bodySmall),
+              // Plan F-46: very long exe paths used to push the
+              // `_StatusBadge` off the right edge of the pane because
+              // `Text` wraps by default. Clamp to two lines with an
+              // ellipsis and expose the full path as a tooltip so
+              // users can still read it if they need to.
+              Tooltip(
+                message: rule.exePath,
+                waitDuration: const Duration(milliseconds: 400),
+                child: Text(
+                  rule.exePath,
+                  style: theme.textTheme.bodySmall,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
         ),

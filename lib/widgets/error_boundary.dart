@@ -8,14 +8,24 @@ import 'package:flutter/material.dart';
 /// `PlatformDispatcher.onError` in `main.dart` and surfaced through the
 /// notification service; this widget only covers the subtree-build failure
 /// case.
+///
+/// The global [ErrorWidget.builder] is installed once from `main.dart` via
+/// [installErrorBoundaryFallback]; this widget only provides the subtree
+/// boundary itself so the fallback is rendered inside the Material app.
 class ErrorBoundary extends StatelessWidget {
   final Widget child;
 
   const ErrorBoundary({super.key, required this.child});
 
+  /// Installs the process-wide [ErrorWidget.builder] fallback used by
+  /// [ErrorBoundary]. Call exactly once during app bootstrap, before
+  /// `runApp`, so the fallback is in place before any frame builds.
+  static void installErrorBoundaryFallback() {
+    ErrorWidget.builder = _buildFallback;
+  }
+
   @override
   Widget build(BuildContext context) {
-    ErrorWidget.builder = _buildFallback;
     return child;
   }
 

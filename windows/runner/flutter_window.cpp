@@ -96,7 +96,16 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      // Plan F-44: WM_FONTCHANGE can be dispatched during window
+      // teardown when flutter_controller_ has already been released
+      // (OnDestroy nulls it out, but we still receive messages while
+      // the Win32 window is being unwound). Dereferencing the unique
+      // pointer then crashes. Guard the call and just drop the event
+      // if the engine is gone — the next time Flutter comes up it
+      // loads fonts freshly anyway.
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

@@ -60,7 +60,7 @@ class ManagedRuleActionsService {
   }
 
   Future<ManagedRuleActionResult> _enable(ManagedRule rule) async {
-    final response = _nvapi.applyExclusion(rule.exePath);
+    final response = await _nvapi.applyExclusion(rule.exePath);
     if (response == null || (response['success'] as bool? ?? false) == false) {
       final raw = (response?['error'] as String?) ?? 'unknown NVAPI failure';
       final code = (response?['nvapiStatus'] as num?)?.toInt();
@@ -86,7 +86,7 @@ class ManagedRuleActionsService {
   }
 
   Future<ManagedRuleActionResult> _disable(ManagedRule rule) async {
-    final response = _nvapi.clearExclusion(rule.exePath);
+    final response = await _nvapi.clearExclusion(rule.exePath);
     if (response == null || (response['success'] as bool? ?? false) == false) {
       final raw = (response?['error'] as String?) ?? 'unknown NVAPI failure';
       final code = (response?['nvapiStatus'] as num?)?.toInt();
@@ -134,7 +134,7 @@ class ManagedRuleActionsService {
     }
 
     try {
-      final response = _nvapi.deleteProfile(rule.profileName);
+      final response = await _nvapi.deleteProfile(rule.profileName);
       if (response == null ||
           (response['success'] as bool? ?? false) == false) {
         final raw = (response?['error'] as String?) ?? 'unknown NVAPI failure';
