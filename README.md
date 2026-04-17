@@ -6,7 +6,7 @@
 
 **Stop NVIDIA's overlay from treating your desktop apps like games.**
 
-A Windows utility for managing per-application NVIDIA capture
+Windows utility for managing per-application NVIDIA capture
 exclusions — no more hunting through NVIDIA Profile Inspector.
 
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2B-0078D6?logo=windows&logoColor=white)](#requirements)
