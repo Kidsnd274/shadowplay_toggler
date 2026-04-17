@@ -112,6 +112,9 @@ No. Clean driver installs can wipe DRS. The app keeps its own record of
 your rules and, on next launch, detects the reset and offers a one-click
 re-apply.
 
+**Where is the local database stored?**
+The app stores its SQLite database at `%appdata%\com.kidsnd274.shadowplay_toggler\ShadowPlay Toggler`. This is where your managed exclusion rules and app state are persisted.
+
 **Does this work on AMD / Intel GPUs?**
 No — NVAPI is NVIDIA-only.
 

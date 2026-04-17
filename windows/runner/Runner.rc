@@ -89,7 +89,7 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.kidsnd274" "\0"
+            VALUE "CompanyName", "com.kidsnd274.shadowplay_toggler" "\0"
             VALUE "FileDescription", "ShadowPlay Toggler" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "shadowplay_toggler" "\0"
