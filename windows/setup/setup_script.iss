@@ -3,7 +3,23 @@
 ; Non-commercial use only
 
 #define MyAppName "ShadowPlay Toggler"
-#define MyAppVersion "1.5"
+
+; Read version from pubspec.yaml
+#define FindVersionLine(int fh) \
+    FileEof(fh) ? "0.0.0" : \
+        (Local[0] = FileRead(fh), \
+         Pos("version:", Local[0]) == 1 ? \
+            Trim(Copy(Local[0], 9)) : \
+            FindVersionLine(fh))
+
+#define StripBuildNumber(str V) \
+    Pos("+", V) > 0 ? Copy(V, 1, Pos("+", V) - 1) : V
+
+#define PubspecFile SourcePath + "\..\..\pubspec.yaml"
+#define FileHandle FileOpen(PubspecFile)
+#define MyAppVersion StripBuildNumber(FindVersionLine(FileHandle))
+#expr FileClose(FileHandle)
+
 #define MyAppPublisher "Kidsnd274"
 #define MyAppURL "https://github.com/Kidsnd274/shadowplay_toggler"
 #define MyAppExeName "shadowplay_toggler.exe"
@@ -32,8 +48,14 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
-OutputBaseFilename=mysetup
+OutputDir={#SourcePath}\..\..\dist
+OutputBaseFilename=shadowplay-toggler-{#MyAppVersion}-windows-setup
+SetupIconFile={#SourcePath}\..\runner\resources\app_icon.ico
+AppendDefaultDirName=yes
+UsePreviousAppDir=yes
+Compression=lzma2/ultra64
 SolidCompression=yes
+UninstallDisplayName=ShadowPlay Toggler
 WizardStyle=modern dark windows11
 
 [Languages]
@@ -43,8 +65,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "L:\repos\shadowplay_toggler\build\windows\x64\runner\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "L:\repos\shadowplay_toggler\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourcePath}\..\..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -52,5 +73,7 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent runascurrentuser
 
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\*"
