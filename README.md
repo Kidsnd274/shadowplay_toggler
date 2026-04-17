@@ -208,7 +208,7 @@ Two **sources of truth** coexist:
 | Source              | Owns                                    | Where it lives                               |
 | ------------------- | --------------------------------------- | -------------------------------------------- |
 | NVIDIA driver (DRS) | Current effective profile/setting state | The driver's own database                    |
-| Local SQLite DB     | User intent for app-managed rules       | App data dir (via `path_provider` + sqflite) |
+| Local SQLite DB     | User intent for app-managed rules       | `%appdata%\com.kidsnd274.shadowplay_toggler\ShadowPlay Toggler` |
 
 
 The local DB only stores *managed* metadata (exe path, intended value,
