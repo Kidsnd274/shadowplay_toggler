@@ -1,7 +1,7 @@
 name: shadowplay_toggler
 description: "ShadowPlay Toggler - manage per-app ShadowPlay/Overlay exclusions."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+1
 
 environment:
   sdk: ^3.11.1

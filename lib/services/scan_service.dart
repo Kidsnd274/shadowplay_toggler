@@ -135,14 +135,21 @@ class ScanService {
     // profiles often ship with a bare basename attachment (e.g. the
     // "Fear The Night" profile has `moonlight.exe` attached). When the
     // user later runs Add Program with the full path
-    // `L:\Apps\Moonlight\moonlight.exe`, the driver ends up with two
-    // executable rows under the same profile — one bare-name (NVIDIA's),
-    // one full-path (ours). They represent the same physical exe and we
-    // must not show the bare-name one as a separate "external" rule.
-    final managedBasenameKeys = <String>{};
+    // `L:\Apps\Moonlight\moonlight.exe`, `bridge_apply_exclusion`'s
+    // `FindApplicationByName` matches the bare entry and reuses that
+    // profile, so the *driver* keeps just one app row (bare name) but
+    // our local DB stores the full path. The scan then comes back with
+    // `appExePath = "moonlight.exe"`, which never matches the
+    // full-path managed key — without this fallback the rule slides
+    // into the orphan bucket and the UI flips to "Inactive" even
+    // though the exclusion is correctly applied at the driver level
+    // (plan F-49 / user-reported "Scan Profiles flips Excluded back to
+    // Disabled").
+    final managedByBasenameKey = <String, ManagedRule>{};
     for (final rule in managed) {
       managedByKey[_key(rule.exePath, rule.profileName)] = rule;
-      managedBasenameKeys.add(_basenameKey(rule.exePath, rule.profileName));
+      managedByBasenameKey[_basenameKey(rule.exePath, rule.profileName)] =
+          rule;
     }
 
     final detected = <ExclusionRule>[];
@@ -150,6 +157,24 @@ class ScanService {
     final drifted = <ExclusionRule>[];
     final seenManagedKeys = <String>{};
     final managedLiveValues = <String, int?>{};
+
+    void recordLiveForManaged(ManagedRule match, ScannedRule s) {
+      managedLiveValues[match.exePath] = s.currentValue;
+      if (match.intendedValue != s.currentValue) {
+        drifted.add(ExclusionRule(
+          exePath: match.exePath,
+          exeName: match.exeName,
+          profileName: match.profileName,
+          isManaged: true,
+          isPredefined: match.profileWasPredefined,
+          currentValue: s.currentValue,
+          previousValue: match.intendedValue,
+          source: ExclusionSource.managed,
+          createdAt: match.createdAt,
+          updatedAt: match.updatedAt,
+        ));
+      }
+    }
 
     for (final s in scanned) {
       if (s.appExePath.isEmpty) {
@@ -168,31 +193,29 @@ class ScanService {
       final match = managedByKey[key];
       if (match != null) {
         seenManagedKeys.add(key);
-        managedLiveValues[match.exePath] = s.currentValue;
-        if (match.intendedValue != s.currentValue) {
-          drifted.add(ExclusionRule(
-            exePath: match.exePath,
-            exeName: match.exeName,
-            profileName: match.profileName,
-            isManaged: true,
-            isPredefined: match.profileWasPredefined,
-            currentValue: s.currentValue,
-            previousValue: match.intendedValue,
-            source: ExclusionSource.managed,
-            createdAt: match.createdAt,
-            updatedAt: match.updatedAt,
-          ));
-        }
+        recordLiveForManaged(match, s);
         // In-sync managed rules are not placed in any scan bucket; the
         // Managed tab renders them from the local DB.
         continue;
       }
 
-      // No exact-path match. Before banishing this row to the Detected
-      // tab, check if a managed rule under the same profile already
-      // covers the same exe by basename — in which case this is a
-      // duplicate driver entry and we hide it.
-      if (managedBasenameKeys.contains(_basenameKey(s.appExePath, s.profileName))) {
+      // No exact-path match. Try the basename fallback: a bare-name
+      // driver row that lines up with a full-path managed row under
+      // the same profile. We must hydrate the managed rule's live
+      // value here too, otherwise it lands in the orphan loop with a
+      // null live value and the UI renders it as Inactive.
+      final basenameMatch =
+          managedByBasenameKey[_basenameKey(s.appExePath, s.profileName)];
+      if (basenameMatch != null) {
+        final managedKey =
+            _key(basenameMatch.exePath, basenameMatch.profileName);
+        if (seenManagedKeys.add(managedKey)) {
+          // First time we resolve this managed rule. Subsequent bare
+          // and full-path duplicates under the same profile carry the
+          // same `currentValue` (it's a profile-level setting), so we
+          // can safely skip them.
+          recordLiveForManaged(basenameMatch, s);
+        }
         continue;
       }
 
